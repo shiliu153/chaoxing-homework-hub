@@ -1,0 +1,21 @@
+[Unit]
+Description=Chaoxing Homework Reminder (web)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/chaoxing-reminder
+Environment=PYTHONUNBUFFERED=1
+Environment=CX_CONFIG=/opt/chaoxing-reminder/config.yaml
+Environment=TZ=Asia/Shanghai
+ExecStart=/opt/chaoxing-reminder/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

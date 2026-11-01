@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>学习通待办中心</title>
+<meta name="theme-color" content="#0e1116">
+<link rel="stylesheet" href="/static/style.css?v=20261101b">
+</head>
+<body>
+
+<!-- 登录 -->
+<div id="login" class="login-wrap">
+  <form class="login-card" id="login-form" autocomplete="off">
+    <div class="brand">
+      <span class="dot-logo"></span>
+      <div>
+        <h1>学习通待办中心</h1>
+        <p class="sub">未完成作业 · 待参加考试 · 到期提醒</p>
+      </div>
+    </div>
+    <label class="field">
+      <span>访问口令</span>
+      <input type="password" id="login-pwd" placeholder="请输入访问口令" required autofocus>
+    </label>
+    <button class="btn primary block" type="submit" id="login-btn">进入</button>
+    <p class="hint" id="login-hint">口令由部署时生成，可在服务端 data/web_password 查看</p>
+  </form>
+</div>
+
+<!-- 主界面 -->
+<div id="app" class="hidden">
+  <header class="topbar">
+    <div class="brand small">
+      <span class="dot-logo"></span>
+      <div>
+        <h1>学习通待办中心</h1>
+        <p class="sub" id="topbar-sub">正在加载…</p>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn ghost" id="btn-refresh" title="立即检测一次">
+        <span class="spin" id="refresh-spin"></span><span id="refresh-label">立即检测</span>
+      </button>
+      <button class="btn ghost" id="btn-diag">连接诊断</button>
+      <button class="btn ghost" id="btn-settings">设置</button>
+      <button class="btn ghost" id="btn-logout">退出</button>
+    </div>
+  </header>
+
+  <div id="banner" class="banner hidden"></div>
+
+  <section id="diag" class="diag hidden">
+    <div class="diag-head">
+      <h2>连接诊断</h2>
+      <div>
+        <span class="muted" id="diag-summary"></span>
+        <button class="btn tiny" id="btn-diag-close">收起</button>
+      </div>
+    </div>
+    <div class="diag-body" id="diag-body"></div>
+  </section>
+
+  <main>
+    <section class="stats">
+      <div class="stat"><span class="stat-num" id="s-total">0</span><span class="stat-label">待办总数</span></div>
+      <div class="stat"><span class="stat-num" id="s-homework">0</span><span class="stat-label">作业</span></div>
+      <div class="stat"><span class="stat-num" id="s-exam">0</span><span class="stat-label">考试</span></div>
+      <div class="stat warn"><span class="stat-num" id="s-due">0</span><span class="stat-label">24 小时内</span></div>
+      <div class="stat danger"><span class="stat-num" id="s-overdue">0</span><span class="stat-label">已逾期</span></div>
+    </section>
+
+    <section class="toolbar">
+      <div class="tabs" id="filter-tabs">
+        <button class="tab active" data-filter="all">全部</button>
+        <button class="tab" data-filter="homework">作业</button>
+        <button class="tab" data-filter="exam">考试</button>
+        <button class="tab" data-filter="urgent">临期/逾期</button>
+        <button class="tab" data-filter="ignored">已忽略</button>
+      </div>
+      <div class="toolbar-right">
+        <input class="search" id="search" placeholder="搜索课程或任务名">
+        <button class="btn tiny" id="btn-logs">运行日志</button>
+      </div>
+    </section>
+
+    <section class="table" id="task-list">
+      <div class="empty">正在加载…</div>
+    </section>
+
+    <section class="panels">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>提醒记录</h2>
+          <span class="muted" id="events-count"></span>
+        </div>
+        <div class="panel-body" id="events">
+          <div class="empty small">暂无提醒记录</div>
+        </div>
+      </div>
+      <div class="panel hidden" id="logs-panel">
+        <div class="panel-head">
+          <h2>运行日志</h2>
+          <button class="btn tiny" id="btn-logs-close">收起</button>
+        </div>
+        <pre class="logs" id="logs">加载中…</pre>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- 设置抽屉 -->
+<div id="drawer-mask" class="mask hidden"></div>
+<aside id="drawer" class="drawer">
+  <div class="drawer-head">
+    <h2>设置</h2>
+    <button class="btn tiny" id="btn-close-drawer">关闭</button>
+  </div>
+  <form id="settings-form" class="drawer-body" autocomplete="off">
+    <fieldset>
+      <legend>学习通账号</legend>
+      <label class="field"><span>账号（手机号/学号）</span>
+        <input id="f-username" name="username" placeholder="13800000000">
+      </label>
+      <label class="field"><span>密码（留空则不修改）</span>
+        <input id="f-password" name="password" type="password" placeholder="password">
+      </label>
+      <label class="field"><span>Cookie（可选，验证码场景用）</span>
+        <textarea id="f-cookie" name="cookie" rows="2" placeholder="_uid=...; _d=..."></textarea>
+      </label>
+      <p class="hint" id="hint-account"></p>
+    </fieldset>
+
+    <fieldset>
+      <legend>轮询与阈值</legend>
+      <label class="field"><span>轮询间隔（秒，≥60）</span>
+        <input id="f-interval" name="interval" type="number" min="60" step="30">
+      </label>
+      <label class="field"><span>提醒阈值（小时，逗号分隔）</span>
+        <input id="f-thresholds" name="thresholds" placeholder="72,24,3">
+      </label>
+      <label class="field"><span>每日汇总时间（HH:MM，可空）</span>
+        <input id="f-daily" name="daily" placeholder="08:30">
+      </label>
+      <label class="check">
+        <input type="checkbox" id="f-dryrun"><span>演练模式（只记录不真正推送）</span>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>推送通道</legend>
+      <label class="field"><span>企业微信机器人 Webhook</span>
+        <input id="f-wecom" name="wecom" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...">
+      </label>
+      <label class="field"><span>Server 酱 SendKey</span>
+        <input id="f-serverchan" name="serverchan" placeholder="SCT...">
+      </label>
+      <button type="button" class="btn tiny" id="btn-test-notify">发送测试消息</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>访问口令</legend>
+      <label class="field"><span>新口令（留空不变，≥6 位）</span>
+        <input id="f-newpwd" name="newpwd" type="password" placeholder="至少 6 位">
+      </label>
+    </fieldset>
+
+    <div class="drawer-foot">
+      <button class="btn primary" type="submit" id="btn-save">保存并生效</button>
+      <span class="muted" id="save-hint"></span>
+    </div>
+  </form>
+</aside>
+
+<!-- 作业详情 -->
+<div id="detail-mask" class="mask hidden"></div>
+<aside id="detail" class="detail-drawer">
+  <div class="drawer-head">
+    <h2 id="d-title">作业详情</h2>
+    <button class="btn tiny" id="btn-close-detail">关闭</button>
+  </div>
+  <div class="drawer-body" id="d-body">
+    <div class="empty small">加载中…</div>
+  </div>
+  <div class="d-actions">
+    <button class="btn tiny" id="d-ignore">忽略此任务</button>
+    <button class="btn tiny" id="d-reload">刷新内容</button>
+    <a class="btn tiny" id="d-open" href="#" target="_blank" rel="noopener">在学习通打开</a>
+  </div>
+</aside>
+
+<div id="toast" class="toast"></div>
+<script src="/static/app.js?v=20261101b"></script>
+</body>
+</html>

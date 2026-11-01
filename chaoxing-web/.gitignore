@@ -1,0 +1,6 @@
+.smoke/
+__pycache__/
+*.pyc
+data/
+venv/
+config.yaml

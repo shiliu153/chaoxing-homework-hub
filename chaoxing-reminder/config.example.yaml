@@ -1,0 +1,101 @@
+# ============================================================
+# 学习通（超星）待办提醒 - 配置示例
+# 复制为 config.yaml 后按需修改；config.yaml 含凭据，不要提交到仓库
+# ============================================================
+
+# ---------- 账号 ----------
+account:
+  username: "13800000000"        # 手机号 / 学号
+  password: "your-password"      # 密码；建议改用环境变量 CX_PASSWORD
+  encrypt_password: true         # 学习通前端会对口令做 AES 加密，保持 true
+  fid: ""                        # 机构号，普通账号留空即可
+  # 兜底方案：从浏览器 F12 复制 Chaoxing 站点的 Cookie 整串贴进来。
+  # 出现验证码 / 异地登录拦截时使用；配置此项后优先走 Cookie，失效才回落密码登录。
+  cookie: ""
+
+# ---------- 轮询 ----------
+poll:
+  interval_seconds: 900          # 轮询频率：15 分钟一次（最小 30 秒）
+  jitter_seconds: 120            # 随机抖动，避免固定节奏触发风控
+  daily_summary_at: "08:30"      # 每天该时刻额外推一次完整待办清单；留空 "": 关闭
+  max_cycles: 0                  # 0 = 一直轮询；>0 用于调试，跑 N 轮后退出
+
+# ---------- 提醒策略 ----------
+remind:
+  thresholds_hours: [72, 24, 3]  # 进入剩余 72h / 24h / 3h 时各提醒一次（自动去重）
+  notify_new: true               # 发现基线之外的新任务时立即提醒
+  notify_overdue: true           # 过截止时间仍未完成时提醒一次
+  only_pending: false            # true = 只保留状态命中 pending_status_keywords 的任务
+  ignore_status_keywords:        # 状态含这些词的任务直接跳过
+    - 已交
+    - 已提交
+    - 已完成
+    - 已批阅
+    - 待批阅
+    - 已结束
+    - 已过期
+    - 缺考
+  pending_status_keywords:
+    - 未交
+    - 未提交
+    - 未完成
+    - 待完成
+    - 未开始
+    - 进行中
+    - 待考试
+    - 待参加
+  expire_grace_days: 3           # 截止超过 N 天的旧任务不再提醒
+  max_items_per_message: 30      # 单条消息最多列多少条待办
+
+# ---------- 提醒通道（可多选，逐个发送，单个失败不影响其它） ----------
+notify:
+  channels:
+    # 控制台输出，永远建议保留（run 模式下即终端日志）
+    - type: console
+      enabled: true
+
+    # 企业微信群机器人：群设置 -> 添加机器人 -> 复制 Webhook
+    # - type: wecom
+    #   webhook: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxxxxxx"
+
+    # Server 酱（微信服务号推送），send_key 形如 SCTxxxxxx
+    # - type: serverchan
+    #   send_key: "SCTxxxxxxxxxxxxxxxx"
+
+    # PushPlus（微信公众号推送）
+    # - type: pushplus
+    #   token: "xxxxxxxxxxxxxxxxxxxx"
+
+    # 钉钉群机器人
+    # - type: dingtalk
+    #   webhook: "https://oapi.dingtalk.com/robot/send?access_token=xxxx"
+
+    # 通用 Webhook：POST JSON {title, content, text, markdown}
+    # - type: webhook
+    #   url: "https://example.com/hook"
+    #   headers:
+    #     Authorization: "Bearer xxxx"
+
+    # 邮件（SMTP）
+    # - type: email
+    #   smtp_host: "smtp.qq.com"
+    #   smtp_port: 465
+    #   username: "you@qq.com"
+    #   password: "授权码"
+    #   to: ["you@qq.com"]
+
+# ---------- 存储 ----------
+storage:
+  data_dir: "data"               # 相对本配置文件所在目录
+  state_file: "state.json"       # 去重状态
+  cookie_file: "cookies.json"    # 登录态缓存
+  summary_dir: "summaries"       # 每轮汇总的 md/json
+
+# ---------- 其它 ----------
+timezone: "Asia/Shanghai"
+request_timeout: 15
+retry_times: 3
+dry_run: false                   # true = 只打印不发外部消息，用于调参
+logging:
+  level: "INFO"                  # DEBUG / INFO / WARNING
+  file: "data/reminder.log"      # 循环滚动日志，留空则只输出到终端

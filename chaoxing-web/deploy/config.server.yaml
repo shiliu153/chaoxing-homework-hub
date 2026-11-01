@@ -1,0 +1,40 @@
+# 服务器初始配置：账号留空，部署后在网页「设置」里填写
+account:
+  username: ""
+  password: ""
+  cookie: ""
+  encrypt_password: true
+  fid: ""
+
+poll:
+  interval_seconds: 900
+  jitter_seconds: 120
+  daily_summary_at: "08:30"
+  max_cycles: 0
+
+remind:
+  thresholds_hours: [72, 24, 3]
+  notify_new: true
+  notify_overdue: true
+  only_pending: false
+  expire_grace_days: 3
+  max_items_per_message: 30
+
+notify:
+  channels:
+    - type: console
+
+storage:
+  data_dir: "data"
+  state_file: "state.json"
+  cookie_file: "cookies.json"
+  summary_dir: "summaries"
+
+timezone: "Asia/Shanghai"
+request_timeout: 15
+retry_times: 3
+dry_run: false
+
+logging:
+  level: "INFO"
+  file: "data/reminder.log"
