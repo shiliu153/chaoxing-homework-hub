@@ -33,7 +33,7 @@ chaoxing-reminder/
 │   ├── notify.py         多通道推送
 │   ├── runner.py         轮询主循环、提醒决策、汇总落盘
 │   └── utils.py          时区与时间格式化
-├── tests/                21 个单元测试（解析 + 提醒决策）
+├── tests/                23 个单元测试（解析 + 提醒决策）
 ├── config.example.yaml   配置模板
 ├── requirements.txt
 └── run.bat               Windows 双击启动
