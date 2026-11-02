@@ -11,11 +11,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from cxreminder.config import Config  # noqa: E402
 from cxreminder.models import Task  # noqa: E402
 from cxreminder.yuketang import (  # noqa: E402
+    YtCourse,
     YuketangClient,
+    YuketangError,
     _pick,
     _to_datetime,
     _walk_leaves,
     classify_leaf,
+    exam_status_text,
+    is_finished_status,
 )
 
 COURSES_JSON = {
@@ -132,7 +136,7 @@ class ClientParseTest(unittest.TestCase):
 
         exam = [t for t in tasks if t.kind == "exam"][0]
         self.assertEqual(exam.status, "已完成")
-        self.assertIn("exam_id=88002", exam.url)
+        self.assertIn("/v2/web/exam/24211265/88002", exam.url)
 
     def test_classroom_tree_preferred(self):
         """专业版课程：classroom 章节树非空时优先使用，不再走 mooc 接口。"""
@@ -178,5 +182,120 @@ class ClientParseTest(unittest.TestCase):
         self.assertEqual(len(cx.key), 16)
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+EXAM_LIST_JSON = {
+    "status": 200,
+    "success": True,
+    "data": [
+        {"id": 2226013, "type": "exam", "title": "第二章 课后作业",
+         "classroom_id": 26436138, "classroom_name": "2026秋-现代控制理论-4班"},
+        {"id": 2226014, "type": "exam", "title": "期末考试",
+         "classroom_id": 26436138, "classroom_name": "2026秋-现代控制理论-4班"},
+        {"id": 9001, "type": "quiz", "title": "随堂小测",
+         "classroom_id": 26436138, "classroom_name": "2026秋-现代控制理论-4班"},
+    ],
+}
+
+COVERS = {
+    # 已结束（已交）：不应进入待办
+    "2226013": {"status": 200, "data": {
+        "title": "第二章 课后作业", "start_time": 1793455416000,
+        "deadline": 1793631600000, "problem_count": 4, "total_score": 100.0,
+        "result": {"status": 4, "unfinished_count": 0, "score": 0.0},
+    }},
+    # 进行中：应进入待办，截止时间来自 cover
+    "2226014": {"status": 200, "data": {
+        "title": "期末考试", "start_time": 1793600000000,
+        "deadline": 1793631600000, "problem_count": 20, "total_score": 100.0,
+        "result": {"status": 1, "unfinished_count": 20},
+    }},
+}
+
+
+class ExamCollectTest(unittest.TestCase):
+    """考试采集：只收 exam、用 cover 补时间与状态、已交卷的跳过。"""
+
+    def setUp(self):
+        self.cfg = Config()
+        self.cfg.yuketang.cookie = "sessionid=fake"
+        self.client = YuketangClient(self.cfg)
+
+        def fake_request(method, path, **kwargs):
+            if "/v2/api/web/courses/list" in path:
+                return {"data": {"list": [
+                    {"classroom_id": 26436138, "name": "2026秋-现代控制理论-4班",
+                     "course": {"id": 1768831, "name": "现代控制理论"}},
+                ]}}
+            if "/v/rain_exam/get_upcoming_exam" in path:
+                return EXAM_LIST_JSON
+            if "/v/exam/cover" in path:
+                exam_id = str((kwargs.get("params") or {}).get("exam_id"))
+                return COVERS.get(exam_id, {"status": 200, "data": {}})
+            if "/api/classroom_course_chapter" in path:
+                return {"Status": 200, "Success": True, "course_chapter_tree": []}
+            if "/mooc-api/v1/lms/learn/course/chapter" in path:
+                return {"data": {}}
+            if "/api/v3/user/basic-info" in path:
+                return {"data": {"name": "陈富"}}
+            raise AssertionError("unexpected path: " + path)
+
+        self.client.request = fake_request
+        self.client.login = lambda: {"name": "陈富"}
+
+    def test_collect_only_pending_exams(self):
+        tasks = self.client.collect()
+        self.assertEqual(len(tasks), 1)
+        task = tasks[0]
+        self.assertEqual(task.kind, "exam")
+        self.assertEqual(task.source, "yuketang")
+        self.assertEqual(task.task_id, "2226014")
+        self.assertEqual(task.title, "期末考试")
+        self.assertEqual(task.status, "进行中")
+        # 毫秒时间戳换算成 2026 年
+        self.assertEqual(task.deadline.year, 2026)
+        self.assertEqual(
+            task.url,
+            "https://changjiang.yuketang.cn/v2/web/exam/26436138/2226014",
+        )
+
+    def test_quiz_is_skipped(self):
+        tasks = self.client.collect()
+        self.assertNotIn("9001", [t.task_id for t in tasks])
+
+    def test_finished_exam_is_skipped(self):
+        # 2226013 的 cover 是 result.status=4（已交卷）→ 不进入待办
+        self.assertIsNone(
+            self.client.build_exam_task("2226013", "26436138", title="第二章 课后作业")
+        )
+
+    def test_cover_failure_still_yields_task(self):
+        def flaky(method, path, **kwargs):
+            if "/v/exam/cover" in path:
+                raise YuketangError("boom")
+            raise AssertionError(path)
+
+        self.client.request = flaky
+        task = self.client.build_exam_task(
+            "2226015", "26436138", title="补考", course_name="现代控制理论",
+            course=YtCourse(classroom_id="26436138", cid="1768831", name="现代控制理论"),
+        )
+        self.assertIsNotNone(task)
+        self.assertEqual(task.status, "待参加")
+        self.assertIn("boom", task.extra.get("cover_error", ""))
+
+    def test_status_mapping(self):
+        self.assertEqual(exam_status_text({"status": 0}), "未开始")
+        self.assertEqual(exam_status_text({"status": 1}), "进行中")
+        self.assertEqual(exam_status_text({}), "待参加")
+        self.assertTrue(is_finished_status(exam_status_text({"status": 4})))
+        self.assertFalse(is_finished_status(exam_status_text({"status": 1})))
+
+    def test_detail_uses_cover(self):
+        task = Task(source="yuketang", kind="exam", course_id="26436138",
+                    class_id="1768831", course_name="现代控制理论",
+                    task_id="2226014", title="期末考试",
+                    extra={"classroom_id": "26436138", "exam_id": "2226014"})
+        detail = self.client.fetch_task_detail(task)
+        self.assertEqual(detail["question_count"], 20)
+        self.assertEqual(detail["total_score"], 100.0)
+        self.assertEqual(detail["status"], "进行中")
+        self.assertIn("期末", detail["text"])

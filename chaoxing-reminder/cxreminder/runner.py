@@ -272,7 +272,11 @@ class Runner:
         return summary
 
     def _collect_yuketang(self):
-        """采集长江雨课堂的作业与考试（失败不影响学习通侧结果）。"""
+        """采集长江雨课堂的考试（失败不影响学习通侧结果）。
+
+        当前只接考试：考试列表来自首页 `/v/rain_exam/get_upcoming_exam/`，
+        逐条用 `/v/exam/cover` 补截止时间与状态；作业暂不采集。
+        """
         from .yuketang import YuketangAuthError, YuketangClient, YuketangError
 
         tasks: List[Task] = []
@@ -286,13 +290,14 @@ class Runner:
         except Exception as exc:  # noqa: BLE001
             return tasks, 0, [f"雨课堂异常：{exc}"]
 
-        for course in courses:
-            try:
-                tasks.extend(client.fetch_course_tasks(course))
-            except YuketangError as exc:
-                errors.append(f"雨课堂《{course.label}》：{exc}")
-            time.sleep(0.3)
-        logger.info("雨课堂：%d 门课程，%d 条待办", len(courses), len(tasks))
+        try:
+            tasks = client.collect()
+        except YuketangAuthError as exc:
+            return [], len(courses), [f"雨课堂登录失效：{exc}"]
+        except YuketangError as exc:
+            errors.append(f"雨课堂考试采集失败：{exc}")
+
+        logger.info("雨课堂：%d 门课程，%d 场考试待参加", len(courses), len(tasks))
         return tasks, len(courses), errors
 
     def ignored_keys(self) -> set:

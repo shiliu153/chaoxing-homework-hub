@@ -473,11 +473,10 @@ def update_settings(payload: SettingsPayload, _: None = Depends(auth_required)) 
 def diagnose(_: None = Depends(auth_required)) -> Dict[str, Any]:
     """分步诊断：学习通（账号/登录/课程/抽样） + 雨课堂（Cookie/课程/章节叶子）。"""
     import time as _time
-    from collections import Counter
 
     from cxreminder.client import ChaoxingClient
     from cxreminder.utils import now_in
-    from cxreminder.yuketang import YuketangClient, _pick, _walk_leaves
+    from cxreminder.yuketang import YuketangClient, _pick
 
     eng = engine()
     cfg = eng.cfg
@@ -557,31 +556,32 @@ def diagnose(_: None = Depends(auth_required)) -> Dict[str, Any]:
                 add("雨课堂课程", False, str(exc)[:300], _time.time() - t0)
                 courses = []
 
-            for course in courses[:2]:
-                t0 = _time.time()
-                try:
-                    tasks = yt.fetch_course_tasks(course)
-                except Exception as exc:  # noqa: BLE001
-                    add(f"雨课堂《{course.label[:12]}》", False, str(exc)[:200],
-                        _time.time() - t0)
-                    continue
-                kinds = Counter(t.kind for t in tasks)
-                detail = (f"共 {len(tasks)} 条（作业 {kinds.get('homework', 0)} / "
-                          f"考试 {kinds.get('exam', 0)}）")
-                if tasks:
-                    detail += "；示例：" + tasks[0].title[:20]
-                else:
-                    try:
-                        raw = yt.request(
-                            "GET", "/mooc-api/v1/lms/learn/course/chapter",
-                            params={"cid": course.cid, "classroom_id": course.classroom_id},
-                        )
-                        leaves = _walk_leaves((raw.get("data") or {}) if isinstance(raw, dict) else {})
-                        types = Counter(str(_pick(l, "leaf_type", "leafType", "type")) for l in leaves)
-                        detail += f"；章节叶子 {len(leaves)} 个，类型分布 {dict(types)}"
-                    except Exception:  # noqa: BLE001
-                        pass
-                add(f"雨课堂《{course.label[:12]}》", True, detail, _time.time() - t0)
+            # 考试列表：首页「考试」入口用的接口
+            t0 = _time.time()
+            try:
+                items = yt.fetch_exam_items()
+                exams = [x for x in items
+                         if str(_pick(x, "type", "item_type", default="")).lower()
+                         in ("", "exam", "exam_paper")]
+                detail = f"原始 {len(items)} 条，其中考试 {len(exams)} 场"
+                if exams:
+                    detail += "；示例：" + str(_pick(exams[0], "title", "name", default=""))[:20]
+                add("雨课堂考试列表", True, detail, _time.time() - t0)
+            except Exception as exc:  # noqa: BLE001
+                add("雨课堂考试列表", False, str(exc)[:300], _time.time() - t0)
+
+            # 待参加：列表 + 封面补时间/状态
+            t0 = _time.time()
+            try:
+                pending = yt.collect()
+                detail = f"待参加 {len(pending)} 场"
+                if pending:
+                    first = pending[0]
+                    detail += (f"；最近一场：{first.title[:18]}，截止 "
+                               f"{first.deadline.strftime('%m-%d %H:%M') if first.deadline else '未知'}")
+                add("雨课堂待参加考试", True, detail, _time.time() - t0)
+            except Exception as exc:  # noqa: BLE001
+                add("雨课堂待参加考试", False, str(exc)[:300], _time.time() - t0)
 
     add("结论", ok_all,
         "连接正常" if ok_all else "存在异常，详见上方步骤")

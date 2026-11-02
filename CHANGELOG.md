@@ -1,15 +1,51 @@
 # Changelog
 
+## Unreleased 2
+
+### 变更
+
+- **雨课堂改为只采考试**：考试列表走首页 `/v/rain_exam/get_upcoming_exam/`
+  （字段 `id / type / title / classroom_id / classroom_name`），逐条用 `/v/exam/cover`
+  补齐开始时间、截止时间、题数、总分与作答状态。
+  - 状态码按前端真实映射：`0 未开始 / 1 进行中 / 2 作废 / 3 待批阅 / 4、5 已交卷 / 6 缺考`，
+    已交卷、缺考、作废的考试不进入待办。
+  - 章节叶子里的考试（显式 `leaf_type=5`）作为补充来源，`exam_id` 从
+    `leaf_info.data.content_info.leaf_type_id` 解析；不再按名称猜测，
+    避免把「阶段性测试」这类普通章节误判成考试。
+  - 作业暂不采集（专业版课堂的章节树普遍为空，作业与考试不是同一套数据）。
+
+### 修复
+
+- 雨课堂课程解析：`course.id` 才是课程 ID（此前误用 `classroom_id`），`teacher` 是对象。
+
+## Unreleased 2
+
+### 变更
+
+- **雨课堂改为只采考试**：考试列表走首页 `/v/rain_exam/get_upcoming_exam/`
+  （字段 `id / type / title / classroom_id / classroom_name`），逐条用 `/v/exam/cover`
+  补齐开始时间、截止时间、题数、总分与作答状态。
+  - 状态码按前端真实映射：`0 未开始 / 1 进行中 / 2 作废 / 3 待批阅 / 4、5 已交卷 / 6 缺考`，
+    已交卷、缺考、作废的考试不进入待办。
+  - 章节叶子里的考试（显式 `leaf_type=5`）作为补充来源，`exam_id` 从
+    `leaf_info.data.content_info.leaf_type_id` 解析；不再按名称猜测，
+    避免把「阶段性测试」这类普通章节误判成考试。
+  - 作业暂不采集（专业版课堂的章节树普遍为空，作业与考试不是同一套数据）。
+
+### 修复
+
+- 雨课堂课程解析：`course.id` 才是课程 ID（此前误用 `classroom_id`），`teacher` 是对象。
+
 ## Unreleased
 
 ### 新增
 
 - **长江雨课堂**：新增 `cxreminder/yuketang.py`，用 `sessionid` Cookie 鉴权，
   采集课程列表与章节叶子中的作业 / 考试，与学习通待办合并展示。
-  - 接口：`/v2/api/web/courses/list`、`/mooc-api/v1/lms/learn/course/chapter`、
-    `/mooc-api/v1/lms/learn/leaf_info/...`、`/v/exam/cover`
+  - 接口：`/v2/api/web/courses/list`、`/v/rain_exam/get_upcoming_exam/`、
+    `/v/exam/cover`、`/mooc-api/v1/lms/learn/leaf_info/...`
   - 任务带 `source` 字段，主键加来源前缀（不改变学习通侧历史主键，不会重新基线）
-  - 设置页新增雨课堂 Cookie 与开关；连接诊断新增雨课堂分段，可输出章节叶子类型分布
+  - 设置页新增雨课堂 Cookie 与扫码登录；连接诊断新增雨课堂分段（考试列表条数 / 待参加场次）
 
 ### 测试
 

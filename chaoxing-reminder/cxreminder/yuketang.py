@@ -1,17 +1,24 @@
-"""长江雨课堂（yuketang）采集：课程列表 / 章节叶子（作业、考试）/ 详情。
+"""长江雨课堂（yuketang）采集：**考试**（当前只做考试，作业暂不采集）。
 
-鉴权说明：雨课堂网页版完全基于 Cookie，没有可用的账号密码接口，
-因此这里只支持粘贴浏览器里的 `sessionid`（可整串 Cookie），并额外携带
-`xtbz: ykt` 请求头。
+鉴权：雨课堂网页版基于 Cookie，没有可用的账号密码接口，因此只支持
+浏览器里的 `sessionid`（可整串 Cookie），并携带 `xtbz: ykt` 请求头。
 
-接口（社区整理的公开路径，已实测可达）：
+接口（实测可用）：
 
-    GET /v2/api/web/courses/list?identity=2      课程列表
-    GET /mooc-api/v1/lms/learn/course/chapter    章节 + 叶子（作业/考试挂在这里）
-    GET /mooc-api/v1/lms/learn/leaf_info/{cid}/{leaf_id}/   作业详情
-    GET /v/exam/cover?exam_id=&classroom_id=     考试封面
+    GET /api/v3/user/basic-info              登录态校验
+    GET /v2/api/web/courses/list?identity=2  课程（班级）列表
+    GET /v/rain_exam/get_upcoming_exam/      学生端考试列表（首页「考试」入口）
+    GET /v/exam/cover?exam_id=&classroom_id= 考试封面（标题/起止时间/题数/分数/状态）
 
-未登录返回：{"errcode":401002,"errmsg":"Cookie has no sessionid"}
+说明：
+
+* 列表项字段为 `{id, type, title, classroom_id, classroom_name}`，
+  其中 `type == "exam"` 是考试，其余（quiz 等）不是考试，直接跳过。
+* 列表**不含截止时间**，因此逐条调用 `cover` 补齐 `start_time/deadline`。
+* `cover.result.status`：0 未开始、1 进行中、2/3/4 已结束（已交/已批阅），
+  已结束的考试不进入待办。
+* 作业走章节叶子（`/api/classroom_course_chapter`）那条链路对多数专业版课程
+  为空，且与考试不是同一套数据，故本版先只采集考试。
 """
 from __future__ import annotations
 
@@ -23,24 +30,38 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from .config import Config
-from .models import KIND_EXAM, KIND_HOMEWORK, Course, Task
+from .models import KIND_EXAM, KIND_HOMEWORK, Task
 from .utils import now_in
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_BASE = "https://changjiang.yuketang.cn"
 
-# 叶子类型 → 待办种类（雨课堂把作业/考试都挂在章节叶子节点上）
-# 4=作业、5=考试 是社区实现里最常见的映射，其余类型（视频/图文等）直接跳过。
+EXAM_LIST_URL = "/v/rain_exam/get_upcoming_exam/"
+EXAM_LIST_FALLBACK_URL = "/api/v3/classroom/on-lesson-upcoming-exam"
+EXAM_COVER_URL = "/v/exam/cover"
+
+# 章节叶子类型 → 待办种类（保留给后续「作业」重启时使用）
 LEAF_TYPE_KIND = {
     4: KIND_HOMEWORK,
     5: KIND_EXAM,
-    9: KIND_HOMEWORK,   # 部分部署把「习题」放在 9
+    9: KIND_HOMEWORK,
 }
 _KIND_BY_NAME = (
     ("考试", KIND_EXAM), ("测验", KIND_EXAM), ("测试", KIND_EXAM),
     ("作业", KIND_HOMEWORK), ("习题", KIND_HOMEWORK), ("练习", KIND_HOMEWORK),
 )
+
+# cover.result.status → 状态文案（前端判定：4/5 已交卷、6 缺考、2 作废）
+EXAM_STATUS = {
+    0: "未开始",
+    1: "进行中",
+    2: "已作废",
+    3: "待批阅",
+    4: "已交卷",
+    5: "已交卷",
+    6: "缺考",
+}
 
 
 class YuketangError(RuntimeError):
@@ -108,7 +129,6 @@ def _walk_leaves(node: Any) -> List[Dict[str, Any]]:
     elif isinstance(node, list):
         for item in node:
             leaves.extend(_walk_leaves(item))
-    # 去重（按 leaf id）
     seen, unique = set(), []
     for leaf in leaves:
         leaf_id = _pick(leaf, "id", "leaf_id", "leafId", "leafinfo_id", "leafinfoId")
@@ -130,6 +150,22 @@ def classify_leaf(leaf: Dict[str, Any]) -> Optional[str]:
         if word in name:
             return kind
     return None
+
+
+def exam_status_text(result: Any) -> str:
+    """把 cover 里的 result.status 翻成中文；缺省视为待参加。"""
+    status = _as_int(_pick(result, "status", default=None))
+    if status is None:
+        return "待参加"
+    return EXAM_STATUS.get(status, "待参加")
+
+
+def is_finished_status(status_text: str) -> bool:
+    """已交卷/缺考/作废的考试不再计入待办。"""
+    return any(
+        word in status_text
+        for word in ("已交卷", "缺考", "已作废", "已提交", "已批阅", "已结束", "已完成")
+    )
 
 
 @dataclass
@@ -265,15 +301,208 @@ class YuketangClient:
         logger.info("雨课堂课程数：%d", len(courses))
         return list(courses.values())
 
-    # ------------------------------------------------------------ 作业/考试
+    # ------------------------------------------------------------ 考试
+
+    def fetch_exam_items(self) -> List[Dict[str, Any]]:
+        """学生端考试列表。
+
+        首页「考试」入口用的是 `/v/rain_exam/get_upcoming_exam/`，
+        返回 `{id, type, title, classroom_id, classroom_name}` 的数组。
+        另有一条账号级接口作为兜底（结构不同，字段名更杂）。
+        """
+        items: List[Dict[str, Any]] = []
+        try:
+            data = self.request("GET", EXAM_LIST_URL)
+            payload = data.get("data") if isinstance(data, dict) else data
+            if isinstance(payload, list):
+                items = [x for x in payload if isinstance(x, dict)]
+        except YuketangError as exc:
+            logger.warning("[雨课堂] 考试列表接口失败：%s", exc)
+
+        if items:
+            return items
+
+        # 兜底：账号级 upcomingExam
+        try:
+            data = self.request("GET", EXAM_LIST_FALLBACK_URL)
+        except YuketangError:
+            return []
+        payload = _pick(data, "data", default={}) or {}
+        for item in _pick(payload, "upcomingExam", "upcoming_exam", default=[]) or []:
+            if isinstance(item, dict):
+                items.append(item)
+        return items
+
+    def exam_cover(self, exam_id: str, classroom_id: str) -> Dict[str, Any]:
+        """考试封面：标题、起止时间、题数、总分、作答状态。"""
+        data = self.request(
+            "GET", EXAM_COVER_URL,
+            params={"exam_id": exam_id, "classroom_id": classroom_id},
+        )
+        payload = data.get("data") if isinstance(data, dict) else None
+        return payload if isinstance(payload, dict) else {}
+
+    def build_exam_task(
+        self,
+        exam_id: Any,
+        classroom_id: Any,
+        title: str = "",
+        course_name: str = "",
+        course: Optional[YtCourse] = None,
+    ) -> Optional[Task]:
+        """用 exam_id 拉封面，合成一条考试待办；已交卷/缺考返回 None。"""
+        exam_id = str(exam_id or "").strip()
+        classroom_id = str(classroom_id or "").strip()
+        if not exam_id or not classroom_id:
+            return None
+
+        cover: Dict[str, Any] = {}
+        cover_error = ""
+        try:
+            cover = self.exam_cover(exam_id, classroom_id)
+        except YuketangError as exc:
+            cover_error = str(exc)[:120]
+            logger.debug("[雨课堂] 考试 %s 封面获取失败：%s", exam_id, exc)
+
+        result = _pick(cover, "result", default={}) or {}
+        status_text = exam_status_text(result) if cover else "待参加"
+        if cover and is_finished_status(status_text):
+            return None
+
+        final_title = title or str(_pick(cover, "title", "name", default="") or "")
+        if not final_title:
+            final_title = f"考试{exam_id}"
+
+        start_at = _to_datetime(_pick(cover, "start_time", "startTime"), self.cfg.timezone)
+        deadline = _to_datetime(
+            _pick(cover, "deadline", "end_time", "endTime"), self.cfg.timezone
+        )
+
+        return Task(
+            source="yuketang",
+            kind=KIND_EXAM,
+            course_id=classroom_id,
+            class_id=course.cid if course else "",
+            course_name=course_name or (course.name if course else "") or "雨课堂",
+            task_id=exam_id,
+            title=final_title,
+            deadline=deadline,
+            status=status_text,
+            url=f"{self.base}/v2/web/exam/{classroom_id}/{exam_id}",
+            extra={
+                "classroom_id": classroom_id,
+                "exam_id": exam_id,
+                "start_at": start_at.isoformat(sep=" ", timespec="minutes") if start_at else "",
+                "problem_count": _pick(cover, "problem_count", "problemCount", default=0),
+                "total_score": _pick(cover, "total_score", "totalScore", default=0),
+                "cover_error": cover_error,
+            },
+        )
+
+    def collect(self) -> List[Task]:
+        """采集全部待参加考试。
+
+        两个来源，按 (classroom_id, exam_id) 去重：
+        1. 首页考试列表 `/v/rain_exam/get_upcoming_exam/`；
+        2. 课程章节树里的考试叶子（部分慕课型课程只在这里出现）。
+        """
+        self.login()
+        courses = {c.classroom_id: c for c in self.fetch_courses()}
+
+        tasks: List[Task] = []
+        seen = set()
+
+        def add(task: Optional[Task]) -> None:
+            if not task:
+                return
+            ident = (task.course_id, task.task_id)
+            if ident in seen:
+                return
+            seen.add(ident)
+            tasks.append(task)
+
+        # 1) 首页考试列表
+        items = self.fetch_exam_items()
+        logger.info("雨课堂考试列表：%d 条", len(items))
+        for item in items:
+            kind_raw = str(_pick(item, "type", "item_type", "itemType", default="")).lower()
+            if kind_raw and kind_raw not in ("exam", "exam_paper"):
+                continue  # quiz 等非考试
+            course = courses.get(str(_pick(item, "classroom_id", "classroomId", default="")))
+            try:
+                add(self.build_exam_task(
+                    exam_id=_pick(item, "id", "exam_id", "examId"),
+                    classroom_id=_pick(item, "classroom_id", "classroomId"),
+                    title=str(_pick(item, "title", "name", default="") or ""),
+                    course_name=str(_pick(item, "classroom_name", "classroomName",
+                                          default="") or ""),
+                    course=course,
+                ))
+            except YuketangError as exc:
+                logger.warning("[雨课堂] 考试解析失败：%s", exc)
+            time.sleep(0.2)
+
+        # 2) 章节树里的考试叶子（只取考试，作业跳过）
+        for course in courses.values():
+            try:
+                leaves = self.fetch_course_tasks(course)
+            except YuketangAuthError:
+                raise
+            except YuketangError as exc:
+                logger.debug("[雨课堂] %s 章节读取失败：%s", course.label, exc)
+                continue
+            for leaf in leaves:
+                # 只认显式的 leaf_type=5（考试）。按名称猜会把「阶段性测试」
+                # 这类普通章节误判成考试，且拿不到 exam_id。
+                if _as_int(leaf.extra.get("leaf_type")) != 5 or leaf.kind != KIND_EXAM:
+                    continue
+                leaf_id = leaf.extra.get("leaf_id")
+                if not leaf_id:
+                    continue
+                try:
+                    exam_id = self.resolve_leaf_exam_id(course, leaf_id)
+                except YuketangError:
+                    continue
+                if not exam_id:
+                    continue
+                try:
+                    add(self.build_exam_task(
+                        exam_id=exam_id,
+                        classroom_id=course.classroom_id,
+                        title=leaf.title,
+                        course=course,
+                    ))
+                except YuketangError:
+                    continue
+            time.sleep(0.2)
+
+        logger.info("雨课堂待参加考试：%d 场", len(tasks))
+        return tasks
+
+    def resolve_leaf_exam_id(self, course: YtCourse, leaf_id: Any) -> str:
+        """章节叶子 → 真实 exam_id。
+
+        考试叶子本身只带 leaf_id，exam_id 在
+        `/mooc-api/v1/lms/learn/leaf_info/{classroom_id}/{leaf_id}/`
+        的 `data.content_info.leaf_type_id` 里。
+        """
+        data = self.request(
+            "GET",
+            f"/mooc-api/v1/lms/learn/leaf_info/{course.classroom_id}/{leaf_id}/",
+            headers={"classroom-id": str(course.classroom_id)},
+        )
+        payload = data.get("data") if isinstance(data, dict) else {}
+        content = _pick(payload or {}, "content_info", "contentInfo", default={}) or {}
+        exam_id = _pick(content, "leaf_type_id", "leafTypeId")
+        return str(exam_id) if exam_id else ""
+
+    # ------------------------------------------------------------ 作业（暂不采集）
 
     def _course_tree(self, course: YtCourse) -> Dict[str, Any]:
-        """取课程章节树。
+        """取课程章节树（作业重启时才用）。
 
-        雨课堂有两套课程：
-        - 专业版（课堂型，course.type=2）：/api/classroom_course_chapter?classroom_id=
-        - 慕课型（学堂在线，type=1）：/mooc-api/v1/lms/learn/course/chapter
-        先用课堂接口，拿不到再退回 mooc 接口。
+        专业版（课堂型）走 `/api/classroom_course_chapter`，
+        慕课型走 `/mooc-api/v1/lms/learn/course/chapter`。
         """
         try:
             data = self.request(
@@ -298,7 +527,7 @@ class YuketangClient:
         return payload or {}
 
     def fetch_course_tasks(self, course: YtCourse) -> List[Task]:
-        now = now_in(self.cfg.timezone)
+        """章节叶子里的作业/考试（当前未启用，保留给作业接入）。"""
         payload = self._course_tree(course)
         leaves = _walk_leaves(payload or {})
 
@@ -314,9 +543,9 @@ class YuketangClient:
                 title = f"{'作业' if kind == KIND_HOMEWORK else '考试'}{leaf_id}"
 
             deadline = _to_datetime(
-                _pick(leaf, "end_time", "endTime", "deadline", "expire_time"), self.cfg.timezone
+                _pick(leaf, "end_time", "endTime", "deadline", "expire_time"),
+                self.cfg.timezone,
             )
-            status = self._leaf_status(leaf)
             task = Task(
                 source="yuketang",
                 kind=kind,
@@ -326,7 +555,7 @@ class YuketangClient:
                 task_id=str(leaf_id or leafinfo_id or title[:16]),
                 title=title,
                 deadline=deadline,
-                status=status,
+                status=self._leaf_status(leaf),
                 url=f"{self.base}/v2/web/index",
                 extra={
                     "leaf_id": leaf_id,
@@ -334,13 +563,11 @@ class YuketangClient:
                     "leaf_type": _pick(leaf, "leaf_type", "leafType"),
                     "classroom_id": course.classroom_id,
                     "cid": course.cid,
-                    "_deadline_check": bool(deadline) and deadline < now,
                 },
             )
             if kind == KIND_EXAM and leafinfo_id:
                 task.url = (
-                    f"{self.base}/v/exam/cover?exam_id={leafinfo_id}"
-                    f"&classroom_id={course.classroom_id}"
+                    f"{self.base}/v2/web/exam/{course.classroom_id}/{leafinfo_id}"
                 )
             tasks.append(task)
         return tasks
@@ -363,7 +590,8 @@ class YuketangClient:
             "title": task.title,
             "course_name": task.course_name,
             "status": task.status,
-            "deadline": task.deadline.isoformat(sep=" ", timespec="minutes") if task.deadline else None,
+            "deadline": task.deadline.isoformat(sep=" ", timespec="minutes")
+            if task.deadline else None,
             "url": task.url,
             "groups": [],
             "questions": [],
@@ -376,110 +604,38 @@ class YuketangClient:
             "source": "yuketang",
         }
 
-        if task.kind == KIND_EXAM and task.extra.get("leafinfo_id"):
-            data = self.request(
-                "GET",
-                "/v/exam/cover",
-                params={
-                    "exam_id": task.extra["leafinfo_id"],
-                    "classroom_id": task.extra.get("classroom_id", ""),
-                },
-            )
-            payload = data.get("data") if isinstance(data.get("data"), dict) else data
-            detail["total_score"] = _pick(payload, "total_score", "totalScore", default=0) or 0
-            detail["question_count"] = _pick(payload, "problem_count", "problemCount",
-                                            "question_count", default=0) or 0
-            detail["text"] = self._summarize(payload)
+        exam_id = task.extra.get("exam_id") or task.extra.get("leafinfo_id")
+        if task.kind != KIND_EXAM or not exam_id:
+            detail["text"] = "雨课堂当前只接入考试，作业详情暂不采集。"
             return detail
 
-        leaf_id = task.extra.get("leaf_id")
-        if leaf_id:
-            data = self.request(
-                "GET",
-                f"/mooc-api/v1/lms/learn/leaf_info/{task.extra.get('cid', '')}/{leaf_id}/",
-                headers={"classroom-id": str(task.extra.get("classroom_id", ""))},
-            )
-            payload = data.get("data") if isinstance(data.get("data"), dict) else data
-            content = _pick(payload, "content_info", "contentInfo", default={}) or {}
-            detail["total_score"] = _pick(
-                payload, "total_score", "totalScore",
-                default=_pick(content, "total_score", "totalScore", default=0)
-            ) or 0
-            detail["question_count"] = _pick(
-                payload, "problem_count", "problemCount",
-                default=_pick(content, "problem_count", default=0)
-            ) or 0
-            detail["text"] = self._summarize({**payload, **content})
-            return detail
+        cover = self.exam_cover(str(exam_id), str(task.extra.get("classroom_id", "")))
+        result = _pick(cover, "result", default={}) or {}
+        start_at = _to_datetime(_pick(cover, "start_time", "startTime"), self.cfg.timezone)
+        deadline = _to_datetime(_pick(cover, "deadline", "end_time", "endTime"),
+                                self.cfg.timezone)
+        detail["title"] = str(_pick(cover, "title", default="") or task.title)
+        detail["status"] = exam_status_text(result)
+        detail["deadline"] = (
+            deadline.isoformat(sep=" ", timespec="minutes") if deadline else detail["deadline"]
+        )
+        detail["total_score"] = _pick(cover, "total_score", "totalScore", default=0) or 0
+        detail["question_count"] = _pick(cover, "problem_count", "problemCount", default=0) or 0
+        if start_at:
+            detail["start_at"] = start_at.isoformat(sep=" ", timespec="minutes")
 
-        detail["text"] = "该任务没有可获取的详情内容。"
+        lines = [
+            f"{detail['title']}",
+            f"状态：{detail['status']}",
+            f"开始：{start_at.strftime('%Y-%m-%d %H:%M') if start_at else '未公布'}",
+            f"截止：{deadline.strftime('%Y-%m-%d %H:%M') if deadline else '未知'}",
+            f"题目数：{detail['question_count']}　总分：{detail['total_score']}",
+        ]
+        score = _pick(result, "score", default=None)
+        if score not in (None, ""):
+            lines.append(f"得分：{score}")
+        if cover.get("description"):
+            text = re.sub(r"<[^>]+>", " ", str(cover["description"]))
+            lines.append(re.sub(r"\s+", " ", text).strip()[:400])
+        detail["text"] = "\n".join(lines)[:1500]
         return detail
-
-    @staticmethod
-    def _summarize(payload: Dict[str, Any]) -> str:
-        """把未知结构的详情压成可读文本，避免前端空白。"""
-        if not isinstance(payload, dict):
-            return ""
-        lines: List[str] = []
-        for key in ("name", "title", "description", "desc", "content", "remark"):
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                text = re.sub(r"<[^>]+>", " ", value)
-                text = re.sub(r"\s+", " ", text).strip()
-                if text:
-                    lines.append(text[:400])
-        for key in ("total_score", "problem_count", "start_time", "end_time", "deadline"):
-            if payload.get(key) not in (None, "", 0):
-                lines.append(f"{key}: {payload[key]}")
-        return "\n".join(lines)[:1500]
-
-    # ------------------------------------------------------------ 组装
-
-    def fetch_upcoming_exams(self, courses: List[YtCourse]) -> List[Task]:
-        """账号级「即将到来的考试」（雨课堂首页提醒）。"""
-        try:
-            data = self.request("GET", "/api/v3/classroom/on-lesson-upcoming-exam")
-        except YuketangError:
-            return []
-        payload = _pick(data, "data", default={}) or {}
-        exams = _pick(payload, "upcomingExam", "upcoming_exam", default=[]) or []
-        by_classroom = {c.classroom_id: c for c in courses}
-        tasks: List[Task] = []
-        for item in exams:
-            if not isinstance(item, dict):
-                continue
-            name = str(_pick(item, "name", "title", "exam_name", default="")).strip()
-            exam_id = _pick(item, "exam_id", "examId", "id")
-            cr = str(_pick(item, "classroom_id", "classroomId", default="") or "")
-            if not name or not exam_id:
-                continue
-            course = by_classroom.get(cr)
-            kind = classify_leaf({"name": name}) or KIND_EXAM
-            deadline = _to_datetime(
-                _pick(item, "end_time", "endTime", "deadline"), self.cfg.timezone
-            )
-            tasks.append(Task(
-                source="yuketang", kind=kind,
-                course_id=cr, class_id=course.cid if course else "",
-                course_name=course.name if course else "雨课堂",
-                task_id=str(exam_id), title=name, deadline=deadline,
-                status="待参加",
-                url=f"{self.base}/v/exam/cover?exam_id={exam_id}&classroom_id={cr}",
-                extra={"classroom_id": cr, "source_api": "upcoming-exam"},
-            ))
-        return tasks
-
-    def collect(self) -> List[Task]:
-        self.login()
-        tasks: List[Task] = []
-        courses = self.fetch_courses()
-        tasks.extend(self.fetch_upcoming_exams(courses))
-        for course in courses:
-            try:
-                tasks.extend(self.fetch_course_tasks(course))
-            except YuketangAuthError:
-                raise
-            except YuketangError as exc:
-                logger.warning("[雨课堂] %s 拉取失败：%s", course.label, exc)
-            time.sleep(0.4)
-        return tasks

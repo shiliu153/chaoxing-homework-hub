@@ -13,9 +13,9 @@ account:
   # 出现验证码 / 异地登录拦截时使用；配置此项后优先走 Cookie，失效才回落密码登录。
   cookie: ""
 
-# ---------- 长江雨课堂（可选） ----------
+# ---------- 长江雨课堂（可选，当前只采集考试） ----------
 yuketang:
-  enabled: false                 # 配了 cookie 后会自动启用
+  enabled: false                 # 配了 cookie 后会自动启用（只采考试，作业暂不采集）
   # 雨课堂只能用 Cookie 登录：浏览器打开 https://changjiang.yuketang.cn 并登录，
   # F12 -> Application -> Cookies -> changjiang.yuketang.cn，复制 sessionid（可连同 csrftoken 一起粘贴）
   cookie: ""
