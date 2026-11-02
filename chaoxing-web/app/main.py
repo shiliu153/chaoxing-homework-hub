@@ -37,6 +37,7 @@ class IgnorePayload(BaseModel):
     title: Optional[str] = None
     course_name: Optional[str] = None
     kind: Optional[str] = None
+    source: Optional[str] = None
     deadline: Optional[str] = None
 
 

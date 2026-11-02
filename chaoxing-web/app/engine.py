@@ -87,6 +87,7 @@ class Engine:
             "title": str(payload.get("title") or "")[:120],
             "course": str(payload.get("course_name") or "")[:80],
             "kind": str(payload.get("kind") or "homework"),
+            "source": str(payload.get("source") or "chaoxing")[:16],
             "deadline": payload.get("deadline"),
             "ignored_at": now_in(self.tz_name).isoformat(sep=" ", timespec="seconds"),
         }

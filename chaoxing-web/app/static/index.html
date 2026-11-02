@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>学习通待办中心</title>
 <meta name="theme-color" content="#0e1116">
-<link rel="stylesheet" href="/static/style.css?v=20261101b">
+<link rel="stylesheet" href="/static/style.css?v=20261102a">
 </head>
 <body>
 
@@ -64,19 +64,26 @@
   <main>
     <section class="stats">
       <div class="stat"><span class="stat-num" id="s-total">0</span><span class="stat-label">待办总数</span></div>
-      <div class="stat"><span class="stat-num" id="s-homework">0</span><span class="stat-label">作业</span></div>
-      <div class="stat"><span class="stat-num" id="s-exam">0</span><span class="stat-label">考试</span></div>
+      <div class="stat"><span class="stat-num" id="s-homework">0</span><span class="stat-label">作业</span><span class="stat-sub" id="s-homework-sub"></span></div>
+      <div class="stat"><span class="stat-num" id="s-exam">0</span><span class="stat-label">考试</span><span class="stat-sub" id="s-exam-sub"></span></div>
       <div class="stat warn"><span class="stat-num" id="s-due">0</span><span class="stat-label">24 小时内</span></div>
       <div class="stat danger"><span class="stat-num" id="s-overdue">0</span><span class="stat-label">已逾期</span></div>
     </section>
 
     <section class="toolbar">
-      <div class="tabs" id="filter-tabs">
-        <button class="tab active" data-filter="all">全部</button>
-        <button class="tab" data-filter="homework">作业</button>
-        <button class="tab" data-filter="exam">考试</button>
-        <button class="tab" data-filter="urgent">临期/逾期</button>
-        <button class="tab" data-filter="ignored">已忽略</button>
+      <div class="toolbar-left">
+        <div class="tabs" id="filter-tabs">
+          <button class="tab active" data-filter="all">全部</button>
+          <button class="tab" data-filter="homework">作业</button>
+          <button class="tab" data-filter="exam">考试</button>
+          <button class="tab" data-filter="urgent">临期/逾期</button>
+          <button class="tab" data-filter="ignored">已忽略</button>
+        </div>
+        <div class="tabs source-tabs" id="source-tabs">
+          <button class="tab active" data-source="all">全部来源</button>
+          <button class="tab" data-source="chaoxing">学习通</button>
+          <button class="tab" data-source="yuketang">雨课堂</button>
+        </div>
       </div>
       <div class="toolbar-right">
         <input class="search" id="search" placeholder="搜索课程或任务名">
@@ -217,6 +224,6 @@
 </div>
 
 <div id="toast" class="toast"></div>
-<script src="/static/app.js?v=20261101b"></script>
+<script src="/static/app.js?v=20261102a"></script>
 </body>
 </html>

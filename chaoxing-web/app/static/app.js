@@ -3,7 +3,7 @@
   "use strict";
 
   var $ = function (sel) { return document.querySelector(sel); };
-  var state = { data: null, filter: "all", q: "", loadedAt: 0, polling: null };
+  var state = { data: null, filter: "all", source: "all", q: "", loadedAt: 0, polling: null };
 
   // ---------------------------------------------------------------- 工具
   function esc(s) {
@@ -78,12 +78,22 @@
   }
 
   // ---------------------------------------------------------------- 渲染
-  function renderStats(c) {
+  function renderStats(c, tasks) {
     $("#s-total").textContent = c.total;
     $("#s-homework").textContent = c.homework;
     $("#s-exam").textContent = c.exam;
     $("#s-due").textContent = c.due_24h;
     $("#s-overdue").textContent = c.overdue;
+
+    // 作业/考试再按来源拆开，避免两侧混在一起看不清
+    var hw = { cx: 0, yt: 0 }, ex = { cx: 0, yt: 0 };
+    (tasks || []).forEach(function (t) {
+      var bucket = t.kind === "exam" ? ex : hw;
+      if ((t.source || "chaoxing") === "yuketang") bucket.yt += 1;
+      else bucket.cx += 1;
+    });
+    $("#s-homework-sub").textContent = "学习通 " + hw.cx + " · 雨课堂 " + hw.yt;
+    $("#s-exam-sub").textContent = "学习通 " + ex.cx + " · 雨课堂 " + ex.yt;
   }
 
   function renderBanner(d) {
@@ -137,14 +147,17 @@
     var act = ignored
       ? '<button class="row-act restore" data-act="unignore">恢复</button>'
       : '<button class="row-act" data-act="ignore">忽略</button>';
+    var src = t.source === "yuketang" ? "yuketang" : "chaoxing";
+    var srcLabel = src === "yuketang" ? "雨课堂" : "学习通";
     return '<div class="' + rowCls + '" data-key="' + esc(t.key || "") + '">' +
+      '<div class="tags">' +
       '<span class="tag' + (kind === "exam" ? " exam" : "") + '">' +
       (kind === "exam" ? "考试" : "作业") + "</span>" +
+      '<span class="tag origin ' + (src === "yuketang" ? "yt" : "cx") + '">' +
+      srcLabel + "</span></div>" +
       '<div class="row-main">' +
       '<div class="row-title" title="' + esc(title) + '">' + esc(title) + "</div>" +
-      '<div class="row-course">' + esc(course) +
-      (t.source === "yuketang" ? '<span class="src">雨课堂</span>' : "") +
-      "</div></div>" +
+      '<div class="row-course">' + esc(course) + "</div></div>" +
       '<div class="cell-time">' + esc(deadline) + "</div>" +
       '<div><span class="' + chipCls + '" data-sec="' +
       (r == null ? "" : Math.round(r + (Date.now() - state.loadedAt) / 1000)) + '">' +
@@ -158,7 +171,10 @@
     var list = $("#task-list");
 
     if (state.filter === "ignored") {
-      var ig = d.ignored || [];
+      var ig = (d.ignored || []).filter(function (t) {
+        if (state.source === "all") return true;
+        return (t.source || "chaoxing") === state.source;
+      });
       if (!ig.length) {
         list.innerHTML = '<div class="empty">还没有忽略任何任务。<br>在任务行右侧点「忽略」即可隐藏并停止提醒。</div>';
         return;
@@ -168,6 +184,7 @@
     }
 
     var items = (d.tasks || []).filter(function (t) {
+      if (state.source !== "all" && (t.source || "chaoxing") !== state.source) return false;
       if (state.filter === "homework" && t.kind !== "homework") return false;
       if (state.filter === "exam" && t.kind !== "exam") return false;
       if (state.filter === "urgent") {
@@ -182,8 +199,12 @@
     });
 
     if (!items.length) {
+      var filtered = state.filter !== "all" || state.source !== "all";
       list.innerHTML = '<div class="empty">' +
-        (d.account_ready ? "当前没有待办任务，保持关注。" : "配置账号后这里会显示作业与考试。") +
+        (filtered
+          ? "当前筛选条件下没有任务，试试切回「全部」或「全部来源」。"
+          : (d.account_ready ? "当前没有待办任务，保持关注。"
+                             : "配置账号后这里会显示作业与考试。")) +
         "</div>";
       return;
     }
@@ -209,7 +230,7 @@
   }
 
   function render(d) {
-    renderStats(d.counts || {});
+    renderStats(d.counts || {}, d.tasks || []);
     renderBanner(d);
     renderTopbar(d);
     renderTasks(d);
@@ -314,6 +335,7 @@
       body.title = (meta && meta.title) || "";
       body.course_name = (meta && (meta.course_name || meta.course)) || "";
       body.kind = (meta && meta.kind) || "homework";
+      body.source = (meta && meta.source) || "chaoxing";
       body.deadline = (meta && meta.deadline) || null;
     }
     await api(ignored ? "/api/unignore" : "/api/ignore", {
@@ -588,9 +610,22 @@
     $("#filter-tabs").addEventListener("click", function (e) {
       var btn = e.target.closest(".tab");
       if (!btn) return;
-      document.querySelectorAll(".tab").forEach(function (t) { t.classList.remove("active"); });
+      document.querySelectorAll("#filter-tabs .tab").forEach(function (t) {
+        t.classList.remove("active");
+      });
       btn.classList.add("active");
       state.filter = btn.getAttribute("data-filter");
+      if (state.data) renderTasks(state.data);
+    });
+
+    $("#source-tabs").addEventListener("click", function (e) {
+      var btn = e.target.closest(".tab");
+      if (!btn) return;
+      document.querySelectorAll("#source-tabs .tab").forEach(function (t) {
+        t.classList.remove("active");
+      });
+      btn.classList.add("active");
+      state.source = btn.getAttribute("data-source");
       if (state.data) renderTasks(state.data);
     });
 
