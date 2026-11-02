@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import threading
+from contextlib import nullcontext
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -25,12 +26,15 @@ logger = logging.getLogger("webapp.engine")
 
 
 class Engine:
-    def __init__(self, config_path: str, tz_name: str = "Asia/Shanghai"):
+    def __init__(self, config_path: str, tz_name: str = "Asia/Shanghai",
+                 run_semaphore=None):
         self.config_path = config_path
         self.tz_name = tz_name
         self._run_lock = threading.Lock()
         self._state_lock = threading.Lock()
         self._stop = threading.Event()
+        # 多用户场景下限制同时采集的人数，避免整点一起打满外部接口
+        self._run_semaphore = run_semaphore
         self._thread: Optional[threading.Thread] = None
 
         self.running = False
@@ -212,8 +216,10 @@ class Engine:
         try:
             with self._run_lock:
                 # 每次都读最新配置，设置面板改完即生效
-                runner = Runner(load_config(self.config_path))
-                summary = runner.run_once()
+                guard = self._run_semaphore if self._run_semaphore is not None else nullcontext()
+                with guard:
+                    runner = Runner(load_config(self.config_path))
+                    summary = runner.run_once()
                 self.last_summary = summary.to_dict()
                 counts = summary.counts()
                 result = {"ok": counts["errors"] == 0, "error": "; ".join(summary.errors),

@@ -18,23 +18,29 @@
 | 手动忽略 | 单条任务忽略后不再计入统计、不再推送，可随时恢复 |
 | 多渠道推送 | 企业微信 / 钉钉机器人、Server 酱、PushPlus、通用 Webhook、SMTP 邮件、终端输出 |
 | 网页面板 | 深色仪表盘、倒计时、筛选搜索、连接诊断、运行日志、在线改配置 |
+| 多用户 | 注册 / 登录 / 改密；每个用户独立绑定账号、独立采集与提醒，数据按用户隔离 |
+| 前后端分离 | 后端只出 `/api/v1` JSON，前端为纯静态站点，由 nginx 独立托管 |
 | 命令行模式 | 不装 Web 也能跑：`python -m cxreminder run` 常驻轮询 |
-| 可测 | 23 个单元测试覆盖时间解析、列表解析、详情解析、去重与提醒决策 |
+| 可测 | 38 个内核单测 + 7 个多用户接口测试（注册、隔离、改密） |
 
 ![detail](docs/images/detail.png)
 
 ## 架构
 
 ```
-浏览器 ──HTTPS──> nginx ──> uvicorn(127.0.0.1:8000) ──> app/  路由 / 鉴权 / 调度线程
-                                                    └──> cxreminder/  采集与提醒内核
-                                                              │
-                                                              └──> 学习通站点
+浏览器 ──HTTPS──> nginx ──┬── /       静态前端（web/）
+                          └── /api/ ──> uvicorn(127.0.0.1:8000)
+                                          ├── app/store.py     用户 / 会话（SQLite）
+                                          ├── app/tenancy.py   每用户目录 + 引擎注册表
+                                          ├── app/engine.py    单用户调度
+                                          └── cxreminder/      采集与提醒内核
 ```
 
 - `cxreminder/` 是纯 Python 内核，命令行与 Web 共用同一套采集、去重、提醒逻辑；
-- Web 层只负责鉴权、调度、展示，不重复实现业务规则；
-- 状态、Cookie、忽略清单、详情缓存都落在 `data/` 下的 JSON 文件里，无数据库依赖。
+- Web 层只负责身份、调度、展示，不重复实现业务规则；
+- 多用户：登录态 → `user_id` → `data/users/<id>/config.yaml` → 该用户的采集引擎；
+  除用户表外不引入数据库，业务数据仍是每人一套 JSON 文件；
+- 详细设计见 [`chaoxing-web/docs/ARCHITECTURE.md`](chaoxing-web/docs/ARCHITECTURE.md)。
 
 ```
 .
@@ -48,8 +54,11 @@
 │   │   └── cli.py              # run / once / doctor / dump / test-notify
 │   ├── tests/                  # 单元测试
 │   └── config.example.yaml
-├── chaoxing-web/               # Web 面板
-│   ├── app/                    # FastAPI 路由、引擎、鉴权、前端静态页
+├── chaoxing-web/               # 后端 + 前端
+│   ├── app/                    # FastAPI 路由 / 多租户 / 引擎 / 用户与会话
+│   ├── web/                    # 纯静态前端（登录注册 + 仪表盘）
+│   ├── tests/                  # 多用户接口测试
+│   ├── docs/ARCHITECTURE.md    # 前后端职责、注册流程、隔离方案、接口变更
 │   ├── deploy/                 # systemd、nginx 站点、宝塔注册 SQL
 │   └── README-DEPLOY.md        # 部署与排障记录（含接口逆向过程）
 └── docs/images/                # 截图

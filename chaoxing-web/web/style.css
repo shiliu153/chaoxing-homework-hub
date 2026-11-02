@@ -43,6 +43,14 @@ body::before {
 }
 
 .hidden { display: none !important; }
+
+/* 顶栏当前用户 */
+.user-chip {
+  font-size: 12px; color: var(--text-dim);
+  padding: 5px 10px; border-radius: 999px;
+  background: rgba(255, 255, 255, .04); border: 1px solid var(--line);
+  max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .muted { color: var(--text-mute); font-size: 12px; }
 
 /* ---------------- 登录 ---------------- */
@@ -443,3 +451,12 @@ legend { font-size: 12px; color: var(--accent); letter-spacing: .4px; padding: 0
 .qr-img { width: 240px; height: 240px; background: #fff; border-radius: 8px; display: block; margin: 4px auto 10px; }
 .qr-status { font-size: 12.5px; color: var(--text-dim); margin: 0 0 10px; min-height: 18px; }
 .qr-acts { display: flex; justify-content: center; gap: 8px; margin-bottom: 6px; }
+
+/* ---------------- 登录 / 注册 ---------------- */
+.auth-tabs {
+  display: flex; gap: 6px; margin: 16px 0 14px;
+  background: var(--bg-soft); padding: 4px; border-radius: 10px;
+  border: 1px solid var(--line);
+}
+.auth-tabs .tab { flex: 1; text-align: center; }
+.auth-tabs .tab.active { background: #23303d; color: var(--text); }

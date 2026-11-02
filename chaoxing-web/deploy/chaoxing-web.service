@@ -1,5 +1,5 @@
 [Unit]
-Description=Chaoxing Homework Reminder (web)
+Description=Chaoxing Homework Hub API (multi-user)
 After=network-online.target
 Wants=network-online.target
 
@@ -9,7 +9,12 @@ User=ubuntu
 Group=ubuntu
 WorkingDirectory=/opt/chaoxing-reminder
 Environment=PYTHONUNBUFFERED=1
-Environment=CX_CONFIG=/opt/chaoxing-reminder/config.yaml
+# 多用户数据根目录：users/<id>/ 各自隔离
+Environment=CX_DATA_DIR=/opt/chaoxing-reminder/data
+# 单用户版本的历史配置，首次启动会迁移成 admin 账号（口令沿用原网页访问口令）
+Environment=CX_LEGACY_CONFIG=/opt/chaoxing-reminder/config.yaml
+# 是否开放注册：1 开放，0 仅管理员建号
+Environment=CX_ALLOW_REGISTRATION=1
 Environment=TZ=Asia/Shanghai
 ExecStart=/opt/chaoxing-reminder/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1
 Restart=always

@@ -4,6 +4,10 @@
 
   var $ = function (sel) { return document.querySelector(sel); };
   var state = { data: null, filter: "all", source: "all", q: "", loadedAt: 0, polling: null };
+  var auth = { user: null, mode: "login" };
+
+  // 前后端分离：默认同源（nginx 反代 /api），也可在 config.js 指向独立后端
+  var API_BASE = String((window.CX_API_BASE || "")).replace(/\/+$/, "") + "/api/v1";
 
   // ---------------------------------------------------------------- 工具
   function esc(s) {
@@ -51,12 +55,12 @@
   // ---------------------------------------------------------------- API
   async function api(path, options) {
     var opts = options || {};
-    opts.credentials = "same-origin";
+    opts.credentials = "include";
     opts.headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
-    var resp = await fetch(path, opts);
+    var resp = await fetch(API_BASE + path, opts);
     if (resp.status === 401) {
-      showLogin();
-      throw new Error("未登录");
+      showAuth();
+      throw new Error("未登录或登录已过期");
     }
     var data = {};
     try { data = await resp.json(); } catch (e) { data = {}; }
@@ -65,16 +69,40 @@
   }
 
   // ---------------------------------------------------------------- 视图切换
-  function showLogin() {
+  function showAuth() {
+    auth.user = null;
     $("#app").classList.add("hidden");
-    $("#login").classList.remove("hidden");
-    var input = $("#login-pwd");
+    $("#auth").classList.remove("hidden");
+    var input = $("#auth-username");
     if (input) input.focus();
   }
 
   function showApp() {
-    $("#login").classList.add("hidden");
+    $("#auth").classList.add("hidden");
     $("#app").classList.remove("hidden");
+  }
+
+  function renderUser() {
+    var u = auth.user || {};
+    $("#user-chip").textContent = u.display_name || u.username || "";
+    $("#user-chip").title = "当前登录：" + (u.username || "");
+  }
+
+  function setAuthMode(mode) {
+    auth.mode = mode;
+    document.querySelectorAll("#auth-tabs .tab").forEach(function (t) {
+      t.classList.toggle("active", t.getAttribute("data-auth") === mode);
+    });
+    $("#auth-display-wrap").classList.toggle("hidden", mode !== "register");
+    $("#auth-invite-wrap").classList.toggle("hidden", mode !== "register");
+    $("#auth-btn").textContent = mode === "register" ? "注册并登录" : "登录";
+    $("#auth-password").setAttribute(
+      "autocomplete", mode === "register" ? "new-password" : "current-password");
+    $("#auth-password").setAttribute(
+      "placeholder", mode === "register" ? "至少 8 位" : "请输入密码");
+    $("#auth-hint").textContent = mode === "register"
+      ? "注册后请先在「设置」里绑定学习通账号，系统才会开始采集。"
+      : "登录后即可绑定学习通 / 雨课堂账号，数据按用户隔离。";
   }
 
   // ---------------------------------------------------------------- 渲染
@@ -275,7 +303,7 @@
   async function loadDetail(refresh) {
     if (!detail.key) return;
     try {
-      var d = await api("/api/task/" + encodeURIComponent(detail.key) + (refresh ? "?refresh=1" : ""));
+      var d = await api("/tasks/" + encodeURIComponent(detail.key) + (refresh ? "?refresh=1" : ""));
       renderDetail(d);
     } catch (e) {
       $("#d-body").innerHTML = '<div class="d-empty">获取失败：' + esc(e.message || "未知错误") + "</div>";
@@ -338,7 +366,7 @@
       body.source = (meta && meta.source) || "chaoxing";
       body.deadline = (meta && meta.deadline) || null;
     }
-    await api(ignored ? "/api/unignore" : "/api/ignore", {
+    await api(ignored ? "/unignore" : "/ignore", {
       method: "POST", body: JSON.stringify(body)
     });
     toast(ignored ? "已恢复该任务" : "已忽略，不再提醒", "ok");
@@ -351,7 +379,7 @@
 
   // ---------------------------------------------------------------- 加载
   async function load() {
-    var d = await api("/api/overview");
+    var d = await api("/overview");
     state.data = d;
     state.loadedAt = Date.now();
     render(d);
@@ -360,7 +388,7 @@
 
   async function refresh() {
     try {
-      var r = await api("/api/refresh", { method: "POST" });
+      var r = await api("/refresh", { method: "POST" });
       toast(r.message || "已触发检测");
       await load();
       clearInterval(state.polling);
@@ -383,7 +411,7 @@
   // ---------------------------------------------------------------- 设置
   async function openSettings() {
     try {
-      var s = await api("/api/settings");
+      var s = await api("/settings");
       $("#f-username").value = s.username || "";
       $("#f-password").value = "";
       $("#f-cookie").value = "";
@@ -398,6 +426,7 @@
       $("#hint-yt").textContent = s.yuketang_has_cookie
         ? "已配置 Cookie（尾号 …" + (s.yuketang_cookie_tail || "") + "），留空表示不修改"
         : "未配置。雨课堂只能用 Cookie 登录：浏览器打开 changjiang.yuketang.cn 后按 F12 复制 sessionid";
+      $("#f-oldpwd").value = "";
       $("#f-newpwd").value = "";
       $("#hint-account").textContent = s.has_password
         ? "已保存账号与密码；密码留空表示不修改。通道：" + (s.channels || []).join(" / ")
@@ -430,14 +459,13 @@
     };
     if ($("#f-password").value) body.password = $("#f-password").value;
     if ($("#f-cookie").value) body.cookie = $("#f-cookie").value;
-    if ($("#f-newpwd").value) body.new_password = $("#f-newpwd").value;
     if ($("#f-ytcookie").value) body.yuketang_cookie = $("#f-ytcookie").value;
 
     var btn = $("#btn-save");
     btn.disabled = true;
     $("#save-hint").textContent = "保存中…";
     try {
-      await api("/api/settings", { method: "POST", body: JSON.stringify(body) });
+      await api("/settings", { method: "POST", body: JSON.stringify(body) });
       $("#save-hint").textContent = "已保存";
       toast("设置已保存并生效", "ok");
       closeSettings();
@@ -474,9 +502,9 @@
     $("#qr-status").textContent = "正在生成二维码…";
     $("#qr-img").removeAttribute("src");
     try {
-      var r = await api("/api/yt/login/start", { method: "POST" });
+      var r = await api("/yuketang/login/start", { method: "POST" });
       qrState.id = r.id;
-      $("#qr-img").src = "/api/yt/login/qr?id=" + encodeURIComponent(r.id) + "&t=" + Date.now();
+      $("#qr-img").src = API_BASE + "/yuketang/login/qr?id=" + encodeURIComponent(r.id) + "&t=" + Date.now();
       $("#qr-status").textContent = "请用微信扫码，并在手机上确认登录";
       qrState.timer = setInterval(pollYtLogin, 3000);
     } catch (e) {
@@ -487,7 +515,7 @@
   async function pollYtLogin() {
     if (!qrState.id) return;
     try {
-      var s = await api("/api/yt/login/status?id=" + encodeURIComponent(qrState.id));
+      var s = await api("/yuketang/login/status?id=" + encodeURIComponent(qrState.id));
       if (s.status === "waiting") {
         $("#qr-status").textContent = "等待扫码…";
       } else if (s.status === "scanned") {
@@ -515,7 +543,7 @@
 
   async function testNotify() {
     try {
-      var r = await api("/api/test-notify", { method: "POST" });
+      var r = await api("/notify/test", { method: "POST" });
       var ok = (r.results || []).filter(function (x) { return x.ok; });
       var bad = (r.results || []).filter(function (x) { return !x.ok; });
       if (bad.length) {
@@ -535,7 +563,7 @@
     $("#diag-summary").textContent = "诊断中，请稍候…";
     body.innerHTML = '<div class="empty small">正在依次检查账号、登录、课程列表…</div>';
     try {
-      var r = await api("/api/diagnose", { method: "POST" });
+      var r = await api("/diagnose", { method: "POST" });
       $("#diag-summary").textContent = r.ok ? "连接正常" : "存在问题";
       body.innerHTML = (r.steps || []).map(function (s) {
         return '<div class="dstep ' + (s.ok ? "ok" : "bad") + '">' +
@@ -556,7 +584,7 @@
     panel.classList.remove("hidden");
     $("#logs").textContent = "加载中…";
     try {
-      var r = await api("/api/logs?lines=150");
+      var r = await api("/logs?lines=150");
       $("#logs").textContent = (r.lines || []).join("\n") || "（暂无日志）";
       $("#logs").scrollTop = $("#logs").scrollHeight;
     } catch (e) {
@@ -566,26 +594,77 @@
 
   // ---------------------------------------------------------------- 绑定
   function bind() {
-    $("#login-form").addEventListener("submit", async function (e) {
+    $("#auth-tabs").addEventListener("click", function (e) {
+      var btn = e.target.closest(".tab");
+      if (!btn) return;
+      setAuthMode(btn.getAttribute("data-auth"));
+    });
+
+    $("#auth-form").addEventListener("submit", async function (e) {
       e.preventDefault();
-      var pwd = $("#login-pwd").value;
-      var btn = $("#login-btn");
+      var btn = $("#auth-btn");
+      var username = $("#auth-username").value.trim();
+      var password = $("#auth-password").value;
       btn.disabled = true;
       try {
-        await api("/api/login", { method: "POST", body: JSON.stringify({ password: pwd }) });
-        $("#login-pwd").value = "";
+        var r;
+        if (auth.mode === "register") {
+          r = await api("/auth/register", {
+            method: "POST",
+            body: JSON.stringify({
+              username: username,
+              password: password,
+              display_name: $("#auth-display").value.trim(),
+              invite_code: $("#auth-invite").value.trim()
+            })
+          });
+        } else {
+          r = await api("/auth/login", {
+            method: "POST",
+            body: JSON.stringify({ username: username, password: password })
+          });
+        }
+        auth.user = r.user;
+        renderUser();
+        $("#auth-password").value = "";
         showApp();
         await load();
+        if (auth.mode === "register") {
+          toast("注册成功，请先在「设置」里绑定学习通账号", "ok");
+          openSettings();
+        }
       } catch (err) {
-        $("#login-hint").textContent = err.message || "登录失败";
+        $("#auth-hint").textContent = err.message || "操作失败";
       } finally {
         btn.disabled = false;
       }
     });
 
     $("#btn-logout").addEventListener("click", async function () {
-      try { await api("/api/logout", { method: "POST" }); } catch (e) { /* ignore */ }
-      showLogin();
+      try { await api("/auth/logout", { method: "POST" }); } catch (e) { /* ignore */ }
+      showAuth();
+    });
+
+    $("#btn-change-pwd").addEventListener("click", async function () {
+      var oldPwd = $("#f-oldpwd").value;
+      var newPwd = $("#f-newpwd").value;
+      if (!oldPwd || !newPwd) {
+        $("#save-hint").textContent = "请填写原密码与新密码";
+        return;
+      }
+      try {
+        await api("/auth/password", {
+          method: "POST",
+          body: JSON.stringify({ old_password: oldPwd, new_password: newPwd })
+        });
+        $("#f-oldpwd").value = "";
+        $("#f-oldpwd").value = "";
+      $("#f-newpwd").value = "";
+        toast("密码已修改，请重新登录", "ok");
+        showAuth();
+      } catch (err) {
+        $("#save-hint").textContent = err.message || "修改失败";
+      }
     });
 
     $("#btn-refresh").addEventListener("click", refresh);
@@ -681,16 +760,15 @@
       load().catch(function () { /* 网络抖动忽略 */ });
     }, 20000);
 
+    setAuthMode("login");
     try {
-      var s = await api("/api/session");
-      if (s.authenticated) {
-        showApp();
-        await load();
-      } else {
-        showLogin();
-      }
+      var me = await api("/auth/me");
+      auth.user = me.user;
+      renderUser();
+      showApp();
+      await load();
     } catch (e) {
-      showLogin();
+      showAuth();
     }
   }
 

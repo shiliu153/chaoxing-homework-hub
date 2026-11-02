@@ -5,13 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>学习通待办中心</title>
 <meta name="theme-color" content="#0e1116">
-<link rel="stylesheet" href="/static/style.css?v=20261102a">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css?v=20261102b">
 </head>
 <body>
 
-<!-- 登录 -->
-<div id="login" class="login-wrap">
-  <form class="login-card" id="login-form" autocomplete="off">
+<!-- 登录 / 注册 -->
+<div id="auth" class="login-wrap">
+  <div class="login-card">
     <div class="brand">
       <span class="dot-logo"></span>
       <div>
@@ -19,13 +20,35 @@
         <p class="sub">未完成作业 · 待参加考试 · 到期提醒</p>
       </div>
     </div>
-    <label class="field">
-      <span>访问口令</span>
-      <input type="password" id="login-pwd" placeholder="请输入访问口令" required autofocus>
-    </label>
-    <button class="btn primary block" type="submit" id="login-btn">进入</button>
-    <p class="hint" id="login-hint">口令由部署时生成，可在服务端 data/web_password 查看</p>
-  </form>
+
+    <div class="auth-tabs" id="auth-tabs">
+      <button type="button" class="tab active" data-auth="login">登录</button>
+      <button type="button" class="tab" data-auth="register">注册</button>
+    </div>
+
+    <form id="auth-form" autocomplete="on">
+      <label class="field">
+        <span>用户名</span>
+        <input id="auth-username" name="username" autocomplete="username"
+               placeholder="3-32 位，中英文/数字/下划线" required>
+      </label>
+      <label class="field">
+        <span>密码</span>
+        <input id="auth-password" name="password" type="password" autocomplete="current-password"
+               placeholder="至少 8 位" required>
+      </label>
+      <label class="field hidden" id="auth-display-wrap">
+        <span>昵称（可选）</span>
+        <input id="auth-display" name="display_name" placeholder="显示在右上角">
+      </label>
+      <label class="field hidden" id="auth-invite-wrap">
+        <span>邀请码</span>
+        <input id="auth-invite" name="invite_code" placeholder="站点开启邀请制时必填">
+      </label>
+      <button class="btn primary block" type="submit" id="auth-btn">登录</button>
+    </form>
+    <p class="hint" id="auth-hint">登录后即可绑定学习通 / 雨课堂账号，数据按用户隔离。</p>
+  </div>
 </div>
 
 <!-- 主界面 -->
@@ -44,6 +67,7 @@
       </button>
       <button class="btn ghost" id="btn-diag">连接诊断</button>
       <button class="btn ghost" id="btn-settings">设置</button>
+      <span class="user-chip" id="user-chip" title="当前登录用户"></span>
       <button class="btn ghost" id="btn-logout">退出</button>
     </div>
   </header>
@@ -178,10 +202,15 @@
     </fieldset>
 
     <fieldset>
-      <legend>访问口令</legend>
-      <label class="field"><span>新口令（留空不变，≥6 位）</span>
-        <input id="f-newpwd" name="newpwd" type="password" placeholder="至少 6 位">
+      <legend>登录密码</legend>
+      <label class="field"><span>原密码</span>
+        <input id="f-oldpwd" name="oldpwd" type="password" placeholder="修改密码时填写">
       </label>
+      <label class="field"><span>新密码（≥8 位）</span>
+        <input id="f-newpwd" name="newpwd" type="password" placeholder="留空表示不修改">
+      </label>
+      <button type="button" class="btn tiny" id="btn-change-pwd">修改密码</button>
+      <p class="hint">修改成功后所有设备都需要重新登录。</p>
     </fieldset>
 
     <div class="drawer-foot">
@@ -224,6 +253,7 @@
 </div>
 
 <div id="toast" class="toast"></div>
-<script src="/static/app.js?v=20261102a"></script>
+<script src="config.js?v=20261102b"></script>
+<script src="app.js?v=20261102b"></script>
 </body>
 </html>

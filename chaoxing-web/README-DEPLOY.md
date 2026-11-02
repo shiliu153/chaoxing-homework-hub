@@ -202,3 +202,78 @@ GET /exam-ans/mooc2/exam/exam-list?courseid&clazzid&cpi&ut=s&enc=<examEnc>&openc
 - 详情：`循环神经网络作业` → `一. 简答题（共1题，100分）`、1 道题、100 分、题干含「LSTM 手写字识别」。
 - 忽略：overview 待办 15 → 14，`ignored` 出现该条；忽略后详情仍可打开（200）；恢复后回到 15。
 - 单测：`python -m unittest discover -s tests` → 23 passed（新增 `WorkDetailTest`）。
+
+## 10. 多用户改造（v2）
+
+### 10.1 变化
+
+| 项 | 旧 | 新 |
+| --- | --- | --- |
+| 页面 | FastAPI 返回 index.html | nginx 直接托管 `web/` |
+| 接口 | `/api/*` 单用户 | `/api/v1/*` 多用户 |
+| 登录 | 一个全局访问口令 | 用户名 + 密码（可注册） |
+| 数据 | `data/` 一份 | `data/users/<id>/` 每人一份 |
+| 进程 | 单引擎 | 每用户一个引擎，全局最多 N 个并发采集 |
+
+### 10.2 部署步骤
+
+```bash
+# 1) 代码
+tar czf - -C chaoxing-web app web deploy tests requirements.txt \
+  | ssh ubuntu@<IP> 'tar xzf - -C /opt/chaoxing-reminder'
+
+# 2) 依赖
+cd /opt/chaoxing-reminder && ./venv/bin/pip install -q -r requirements.txt
+
+# 3) 服务（新增 CX_DATA_DIR / CX_LEGACY_CONFIG / CX_ALLOW_REGISTRATION）
+sudo cp deploy/chaoxing-web.service /etc/systemd/system/chaoxing-web.service
+sudo systemctl daemon-reload && sudo systemctl restart chaoxing-web
+
+# 4) 前端静态文件（注意 --strip-components=1，否则会出现 web/web/）
+tar czf - -C chaoxing-web web \
+  | ssh ubuntu@<IP> 'sudo mkdir -p /www/wwwroot/<域名>/web && \
+      sudo tar xzf - -C /www/wwwroot/<域名>/web --strip-components=1 && \
+      sudo chown -R www:www /www/wwwroot/<域名>'
+
+# 5) nginx：/ 走静态，/api/ 反代 8000
+sudo cp deploy/nginx-site.conf /www/server/panel/vhost/nginx/<域名>.conf
+sudo /www/server/nginx/sbin/nginx -t && sudo /www/server/nginx/sbin/nginx -s reload
+```
+
+### 10.3 首次启动的自动迁移
+
+`users` 表为空且检测到旧 `config.yaml` 时：
+
+- 用旧网页访问口令（`data/web_password`）建 `admin`；
+- 旧配置复制到 `data/users/1/config.yaml`，历史状态/忽略/缓存/汇总整体搬进 `users/1/`；
+- 旧配置改名 `config.yaml.migrated`。
+
+日志里会出现 `检测到单用户历史数据，已迁移为账号 admin`，用原来的访问口令登录即可。
+
+### 10.4 常用运维
+
+```bash
+# 关闭注册（仅管理员建号）
+sudo sed -i 's/CX_ALLOW_REGISTRATION=1/CX_ALLOW_REGISTRATION=0/' \
+  /etc/systemd/system/chaoxing-web.service
+sudo systemctl daemon-reload && sudo systemctl restart chaoxing-web
+
+# 重置某个用户的密码（忘记密码时）
+cd /opt/chaoxing-reminder
+./venv/bin/python -c "from app.store import UserStore; s=UserStore('data/app.db'); \
+u=s.get_by_username('admin'); s.set_password(u['id'],'NewPassw0rd!'); print('已重置', u['username'])"
+
+# 查看用户列表
+sqlite3 data/app.db "select id, username, created_at, last_login_at from users;"
+```
+
+### 10.5 回滚
+
+```bash
+sudo systemctl stop chaoxing-web
+sudo tar xzf /opt/backup-chaoxing-<时间戳>.tgz -C /opt/chaoxing-reminder
+# 恢复旧版 app/ 代码与旧 nginx 配置后
+sudo systemctl start chaoxing-web
+```
+
+回滚会把 `data/` 恢复成单用户结构，迁移后新产生的 `users/` 会被覆盖，先另存一份。

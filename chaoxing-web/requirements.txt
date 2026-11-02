@@ -1,6 +1,6 @@
 fastapi>=0.110
-uvicorn[standard]>=0.29
+uvicorn[standard]>=0.27
 PyYAML>=6.0
-requests>=2.28
-pycryptodome>=3.15
-tzdata>=2023.3
+requests>=2.31
+pycryptodome>=3.19
+cryptography>=42.0

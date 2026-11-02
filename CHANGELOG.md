@@ -1,5 +1,30 @@
 # Changelog
 
+## v2.0.0 — 多用户 + 前后端分离
+
+### 架构
+
+- **前后端分离**：后端只提供 `/api/v1/**` JSON，页面迁到 `web/`，由 nginx 直接托管。
+- **多用户**：SQLite `users` / `sessions` 表；注册（用户名 + 密码，可选邀请码）、登录、改密。
+- **按身份匹配账号**：会话 → `user_id` → `data/users/<id>/config.yaml` → 该用户的采集引擎，
+  不接受任何 `user_id` 入参，杜绝越权。
+- **数据隔离**：配置、状态、忽略、缓存、汇总、日志全部落在 `data/users/<id>/`（目录 0700、配置 0600）。
+- **并发控制**：`EngineManager.poll_slots` 限制全局同时采集的用户数（`CX_MAX_CONCURRENT_POLLS`，默认 2）。
+- **自动迁移**：首次启动把单用户数据迁移为 `admin`，口令沿用原网页访问口令。
+
+### 接口
+
+- 全部接口迁到 `/api/v1`：`auth/register|login|logout|me|password`、
+  `overview`、`refresh`、`tasks/{key}`、`settings`、`diagnose`、`notify/test`、
+  `logs`、`ignore`、`unignore`、`yuketang/login/*`。
+- 扫码登录会记录发起人 `user_id`，其他人的 sid 一律 404。
+
+### 其它
+
+- 新增 `chaoxing-web/docs/ARCHITECTURE.md`（职责划分、注册流程、隔离方案、接口对照）。
+- 新增 7 个多用户接口测试（注册、重名、弱密码、隔离、退出、改密）。
+- 移除 `app/static/`（旧单页）与 `app/auth.py`（单口令鉴权）。
+
 ## Unreleased 2
 
 ### 界面
