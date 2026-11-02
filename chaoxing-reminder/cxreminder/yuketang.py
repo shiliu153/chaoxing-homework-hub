@@ -248,11 +248,18 @@ class YuketangClient:
             classroom_id = _pick(item, "classroom_id", "classroomId", "classroomID")
             if not classroom_id:
                 continue
+            inner = _pick(item, "course", "courseInfo", default={}) or {}
+            teacher = _pick(item, "teacher", "teacher_name", "teacherName", default="")
+            if isinstance(teacher, dict):
+                teacher = _pick(teacher, "name", "nickname", default="")
             course = YtCourse(
                 classroom_id=str(classroom_id),
-                cid=str(_pick(item, "cid", "course_id", "courseId", default=classroom_id)),
-                name=str(_pick(item, "name", "course_name", "courseName", default="")),
-                teacher=str(_pick(item, "teacher", "teacher_name", "teacherName", default="")),
+                # course.id 是课程 ID；classroom_id 是班级 ID，两者不能混用
+                cid=str(_pick(inner, "id", "course_id") or _pick(
+                    item, "cid", "course_id", "courseId", default=classroom_id)),
+                name=str(_pick(item, "name", "course_name", "courseName", default="")
+                         or _pick(inner, "name", default="")),
+                teacher=str(teacher or ""),
             )
             courses.setdefault(course.classroom_id, course)
         logger.info("雨课堂课程数：%d", len(courses))
@@ -260,14 +267,39 @@ class YuketangClient:
 
     # ------------------------------------------------------------ 作业/考试
 
+    def _course_tree(self, course: YtCourse) -> Dict[str, Any]:
+        """取课程章节树。
+
+        雨课堂有两套课程：
+        - 专业版（课堂型，course.type=2）：/api/classroom_course_chapter?classroom_id=
+        - 慕课型（学堂在线，type=1）：/mooc-api/v1/lms/learn/course/chapter
+        先用课堂接口，拿不到再退回 mooc 接口。
+        """
+        try:
+            data = self.request(
+                "GET", "/api/classroom_course_chapter",
+                params={"classroom_id": course.classroom_id},
+            )
+            tree = _pick(data, "course_chapter_tree", "courseChapterTree", default=[])
+            if tree:
+                return {"course_chapter": tree}
+        except YuketangError as exc:
+            logger.debug("[雨课堂] 课堂章节接口失败：%s", exc)
+
+        try:
+            data = self.request(
+                "GET", "/mooc-api/v1/lms/learn/course/chapter",
+                params={"cid": course.cid, "classroom_id": course.classroom_id},
+            )
+        except YuketangError as exc:
+            logger.debug("[雨课堂] mooc 章节接口失败：%s", exc)
+            return {}
+        payload = data.get("data") if isinstance(data, dict) else {}
+        return payload or {}
+
     def fetch_course_tasks(self, course: YtCourse) -> List[Task]:
         now = now_in(self.cfg.timezone)
-        data = self.request(
-            "GET",
-            "/mooc-api/v1/lms/learn/course/chapter",
-            params={"cid": course.cid, "classroom_id": course.classroom_id},
-        )
-        payload = data.get("data") if isinstance(data, dict) else {}
+        payload = self._course_tree(course)
         leaves = _walk_leaves(payload or {})
 
         tasks: List[Task] = []
@@ -403,10 +435,46 @@ class YuketangClient:
 
     # ------------------------------------------------------------ 组装
 
+    def fetch_upcoming_exams(self, courses: List[YtCourse]) -> List[Task]:
+        """账号级「即将到来的考试」（雨课堂首页提醒）。"""
+        try:
+            data = self.request("GET", "/api/v3/classroom/on-lesson-upcoming-exam")
+        except YuketangError:
+            return []
+        payload = _pick(data, "data", default={}) or {}
+        exams = _pick(payload, "upcomingExam", "upcoming_exam", default=[]) or []
+        by_classroom = {c.classroom_id: c for c in courses}
+        tasks: List[Task] = []
+        for item in exams:
+            if not isinstance(item, dict):
+                continue
+            name = str(_pick(item, "name", "title", "exam_name", default="")).strip()
+            exam_id = _pick(item, "exam_id", "examId", "id")
+            cr = str(_pick(item, "classroom_id", "classroomId", default="") or "")
+            if not name or not exam_id:
+                continue
+            course = by_classroom.get(cr)
+            kind = classify_leaf({"name": name}) or KIND_EXAM
+            deadline = _to_datetime(
+                _pick(item, "end_time", "endTime", "deadline"), self.cfg.timezone
+            )
+            tasks.append(Task(
+                source="yuketang", kind=kind,
+                course_id=cr, class_id=course.cid if course else "",
+                course_name=course.name if course else "雨课堂",
+                task_id=str(exam_id), title=name, deadline=deadline,
+                status="待参加",
+                url=f"{self.base}/v/exam/cover?exam_id={exam_id}&classroom_id={cr}",
+                extra={"classroom_id": cr, "source_api": "upcoming-exam"},
+            ))
+        return tasks
+
     def collect(self) -> List[Task]:
         self.login()
         tasks: List[Task] = []
-        for course in self.fetch_courses():
+        courses = self.fetch_courses()
+        tasks.extend(self.fetch_upcoming_exams(courses))
+        for course in courses:
             try:
                 tasks.extend(self.fetch_course_tasks(course))
             except YuketangAuthError:

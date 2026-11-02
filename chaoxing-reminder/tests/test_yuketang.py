@@ -108,7 +108,12 @@ class ClientParseTest(unittest.TestCase):
         self.assertEqual(courses[1].teacher, "李老师")
 
     def test_fetch_tasks(self):
-        self._stub({"/course/chapter": CHAPTER_JSON})
+        # 课堂章节接口返回空 -> 回退到 mooc 接口
+        self._stub({
+            "/api/classroom_course_chapter": {"Status": 200, "Success": True,
+                                              "course_chapter_tree": []},
+            "/course/chapter": CHAPTER_JSON,
+        })
         from cxreminder.yuketang import YtCourse
 
         tasks = self.client.fetch_course_tasks(
@@ -128,6 +133,39 @@ class ClientParseTest(unittest.TestCase):
         exam = [t for t in tasks if t.kind == "exam"][0]
         self.assertEqual(exam.status, "已完成")
         self.assertIn("exam_id=88002", exam.url)
+
+    def test_classroom_tree_preferred(self):
+        """专业版课程：classroom 章节树非空时优先使用，不再走 mooc 接口。"""
+        classroom_tree = {"Status": 200, "Success": True, "course_chapter_tree": [
+            {"name": "第一章", "section_leaf_list": [
+                {"id": 2001, "name": "第一章 作业", "leaf_type": 4,
+                 "end_time": 1793600000, "is_finished": 0},
+            ]},
+        ]}
+        self._stub({"/api/classroom_course_chapter": classroom_tree})
+        from cxreminder.yuketang import YtCourse
+
+        tasks = self.client.fetch_course_tasks(
+            YtCourse(classroom_id="24211265", cid="997001", name="工程制图")
+        )
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0].kind, "homework")
+        self.assertEqual(tasks[0].title, "第一章 作业")
+
+    def test_course_fields_from_nested_object(self):
+        """teacher 是对象、course.id 才是课程 ID。"""
+        payload = {"data": {"list": [{
+            "classroom_id": 24211265,
+            "name": "2026秋-工程制图-2班",
+            "teacher": {"user_id": 1, "name": "张老师"},
+            "course": {"id": 3398735, "name": "工程制图", "type": 2},
+        }]}}
+        self._stub({"/v2/api/web/courses/list": payload})
+        courses = self.client.fetch_courses()
+        self.assertEqual(courses[0].classroom_id, "24211265")
+        self.assertEqual(courses[0].cid, "3398735")
+        self.assertEqual(courses[0].name, "2026秋-工程制图-2班")
+        self.assertEqual(courses[0].teacher, "张老师")
 
     def test_source_changes_key_but_not_chaoxing(self):
         cx = Task(kind="homework", course_id="1", class_id="2", course_name="c",
