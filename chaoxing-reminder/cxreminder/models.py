@@ -42,6 +42,7 @@ class Task:
     course_name: str
     task_id: str
     title: str
+    source: str = "chaoxing"          # chaoxing / yuketang
     deadline: Optional[datetime] = None
     status: str = ""
     url: str = ""
@@ -53,10 +54,15 @@ class Task:
 
     @property
     def key(self) -> str:
-        """稳定主键：用于跨轮次比对，避免重复提醒。"""
+        """稳定主键：用于跨轮次比对，避免重复提醒。
+
+        非默认来源加前缀，保证学习通侧的历史 key 不变（不会造成重新基线）。
+        """
         base = "|".join(
             [self.kind, self.course_id, self.class_id, self.task_id or self.title]
         )
+        if self.source and self.source != "chaoxing":
+            base = f"{self.source}|{base}"
         return hashlib.sha1(base.encode("utf-8")).hexdigest()[:16]
 
     def remaining(self, now: datetime) -> Optional[timedelta]:
@@ -99,6 +105,7 @@ class Task:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "source": self.source,
             "kind": self.kind,
             "course_id": self.course_id,
             "class_id": self.class_id,

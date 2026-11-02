@@ -142,7 +142,9 @@
       (kind === "exam" ? "考试" : "作业") + "</span>" +
       '<div class="row-main">' +
       '<div class="row-title" title="' + esc(title) + '">' + esc(title) + "</div>" +
-      '<div class="row-course">' + esc(course) + "</div></div>" +
+      '<div class="row-course">' + esc(course) +
+      (t.source === "yuketang" ? '<span class="src">雨课堂</span>' : "") +
+      "</div></div>" +
       '<div class="cell-time">' + esc(deadline) + "</div>" +
       '<div><span class="' + chipCls + '" data-sec="' +
       (r == null ? "" : Math.round(r + (Date.now() - state.loadedAt) / 1000)) + '">' +
@@ -369,6 +371,11 @@
       $("#f-wecom").value = s.wecom_webhook || "";
       $("#f-serverchan").value = s.serverchan_key || "";
       $("#f-dryrun").checked = !!s.dry_run;
+      $("#f-ytcookie").value = "";
+      $("#f-ytenable").checked = !!s.yuketang_enabled;
+      $("#hint-yt").textContent = s.yuketang_has_cookie
+        ? "已配置 Cookie（尾号 …" + (s.yuketang_cookie_tail || "") + "），留空表示不修改"
+        : "未配置。雨课堂只能用 Cookie 登录：浏览器打开 changjiang.yuketang.cn 后按 F12 复制 sessionid";
       $("#f-newpwd").value = "";
       $("#hint-account").textContent = s.has_password
         ? "已保存账号与密码；密码留空表示不修改。通道：" + (s.channels || []).join(" / ")
@@ -394,6 +401,7 @@
       interval_seconds: Number($("#f-interval").value) || 900,
       thresholds_hours: thresholds.length ? thresholds : [72, 24, 3],
       daily_summary_at: $("#f-daily").value,
+      yuketang_enabled: $("#f-ytenable").checked,
       wecom_webhook: $("#f-wecom").value,
       serverchan_key: $("#f-serverchan").value,
       dry_run: $("#f-dryrun").checked
@@ -401,6 +409,7 @@
     if ($("#f-password").value) body.password = $("#f-password").value;
     if ($("#f-cookie").value) body.cookie = $("#f-cookie").value;
     if ($("#f-newpwd").value) body.new_password = $("#f-newpwd").value;
+    if ($("#f-ytcookie").value) body.yuketang_cookie = $("#f-ytcookie").value;
 
     var btn = $("#btn-save");
     btn.disabled = true;

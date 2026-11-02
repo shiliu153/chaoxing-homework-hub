@@ -54,6 +54,15 @@ class RemindConfig:
 
 
 @dataclass
+class YuketangConfig:
+    """长江雨课堂：只支持 Cookie 鉴权（浏览器里的 sessionid）。"""
+
+    enabled: bool = False
+    cookie: str = ""
+    base_url: str = "https://changjiang.yuketang.cn"
+
+
+@dataclass
 class StorageConfig:
     data_dir: str = "data"
     state_file: str = "state.json"
@@ -79,6 +88,7 @@ class Config:
     poll: PollConfig = field(default_factory=PollConfig)
     remind: RemindConfig = field(default_factory=RemindConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
+    yuketang: YuketangConfig = field(default_factory=YuketangConfig)
     channels: List[Dict[str, Any]] = field(default_factory=lambda: [{"type": "console"}])
     timezone: str = "Asia/Shanghai"
     request_timeout: float = 15.0
@@ -180,6 +190,15 @@ def load_config(path: str) -> Config:
         summary_dir=str(_pick(store_raw, "summary_dir", "summaries")),
     )
 
+    yt_raw = raw.get("yuketang") or {}
+    yt_cookie = os.environ.get("CX_YT_COOKIE", str(_pick(yt_raw, "cookie", ""))).strip()
+    yuketang = YuketangConfig(
+        cookie=yt_cookie,
+        base_url=str(_pick(yt_raw, "base_url", "https://changjiang.yuketang.cn")).rstrip("/"),
+        # 配了 Cookie 就默认启用，除非显式关掉
+        enabled=bool(_pick(yt_raw, "enabled", bool(yt_cookie))) and bool(yt_cookie),
+    )
+
     channels = raw.get("notify") or raw.get("channels") or [{"type": "console"}]
     if isinstance(channels, dict):
         channels = channels.get("channels") or [channels]
@@ -214,6 +233,7 @@ def load_config(path: str) -> Config:
         poll=poll,
         remind=remind,
         storage=storage,
+        yuketang=yuketang,
         channels=norm_channels,
         timezone=str(_pick(raw, "timezone", "Asia/Shanghai")),
         request_timeout=float(_pick(raw, "request_timeout", 15)),

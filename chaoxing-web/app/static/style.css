@@ -417,3 +417,11 @@ legend { font-size: 12px; color: var(--accent); letter-spacing: .4px; padding: 0
   .row .cell-time, .row .status { display: none; }
   .detail-drawer { width: 100%; }
 }
+
+/* 来源标记 */
+.src {
+  display: inline-block; margin-left: 6px; padding: 0 5px;
+  font-size: 10.5px; line-height: 15px; border-radius: 4px;
+  color: #9db4c9; border: 1px solid #2b3a4a; background: rgba(74, 144, 217, .08);
+  vertical-align: 1px;
+}

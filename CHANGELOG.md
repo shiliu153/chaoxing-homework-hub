@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### 新增
+
+- **长江雨课堂**：新增 `cxreminder/yuketang.py`，用 `sessionid` Cookie 鉴权，
+  采集课程列表与章节叶子中的作业 / 考试，与学习通待办合并展示。
+  - 接口：`/v2/api/web/courses/list`、`/mooc-api/v1/lms/learn/course/chapter`、
+    `/mooc-api/v1/lms/learn/leaf_info/...`、`/v/exam/cover`
+  - 任务带 `source` 字段，主键加来源前缀（不改变学习通侧历史主键，不会重新基线）
+  - 设置页新增雨课堂 Cookie 与开关；连接诊断新增雨课堂分段，可输出章节叶子类型分布
+
+### 测试
+
+- 新增 7 个单元测试（课程解析、叶子分类、时间兼容、来源主键），共 30 个
+
 ## v1.0.0 (2026-11-01)
 
 首个可用版本。

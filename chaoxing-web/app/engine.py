@@ -122,6 +122,7 @@ class Engine:
             course_name=item.get("course_name") or "",
             task_id=str(item.get("task_id") or ""),
             title=item.get("title") or "",
+            source=item.get("source") or "chaoxing",
         )
         return task.key
 
@@ -142,7 +143,9 @@ class Engine:
         item = self._task_index().get(key)
         if not item:
             raise KeyError("任务不在最近一次检测结果中，请先点「立即检测」")
+        source = item.get("source") or "chaoxing"
         task = Task(
+            source=source,
             kind=item.get("kind") or "homework",
             course_id=str(item.get("course_id") or ""),
             class_id=str(item.get("class_id") or ""),
@@ -153,9 +156,16 @@ class Engine:
             status=item.get("status") or "",
             url=item.get("url") or "",
         )
-        client = ChaoxingClient(self.cfg)
-        client.login()
-        detail = client.fetch_task_detail(task)
+        if source == "yuketang":
+            from cxreminder.yuketang import YuketangClient
+
+            yt = YuketangClient(self.cfg)
+            yt.login()
+            detail = yt.fetch_task_detail(task)
+        else:
+            client = ChaoxingClient(self.cfg)
+            client.login()
+            detail = client.fetch_task_detail(task)
         try:
             with open(cache_path, "w", encoding="utf-8") as fh:
                 json.dump(detail, fh, ensure_ascii=False, indent=2)

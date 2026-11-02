@@ -53,6 +53,8 @@ class SettingsPayload(BaseModel):
     daily_summary_at: Optional[str] = None
     wecom_webhook: Optional[str] = None
     serverchan_key: Optional[str] = None
+    yuketang_cookie: Optional[str] = None
+    yuketang_enabled: Optional[bool] = None
     dry_run: Optional[bool] = None
     new_password: Optional[str] = None
 
@@ -235,6 +237,10 @@ def get_settings(_: None = Depends(auth_required)) -> Dict[str, Any]:
         "wecom_webhook": wecom,
         "serverchan_key": serverchan,
         "dry_run": eng.cfg.dry_run,
+        "yuketang_enabled": bool(eng.cfg.yuketang.enabled),
+        "yuketang_has_cookie": bool(eng.cfg.yuketang.cookie),
+        "yuketang_cookie_tail": (eng.cfg.yuketang.cookie[-8:]
+                                 if eng.cfg.yuketang.cookie else ""),
         "channels": [c.get("type") for c in channels],
     }
 
@@ -264,6 +270,13 @@ def update_settings(payload: SettingsPayload, _: None = Depends(auth_required)) 
         raw["remind"]["thresholds_hours"] = values or [24]
     if payload.dry_run is not None:
         raw["dry_run"] = bool(payload.dry_run)
+
+    if payload.yuketang_cookie is not None or payload.yuketang_enabled is not None:
+        raw.setdefault("yuketang", {})
+        if payload.yuketang_cookie:
+            raw["yuketang"]["cookie"] = payload.yuketang_cookie.strip()
+        if payload.yuketang_enabled is not None:
+            raw["yuketang"]["enabled"] = bool(payload.yuketang_enabled)
 
     if payload.wecom_webhook is not None or payload.serverchan_key is not None:
         old = {c.get("type"): c for c in (raw["notify"].get("channels") or [])}
@@ -298,68 +311,121 @@ def update_settings(payload: SettingsPayload, _: None = Depends(auth_required)) 
 
 @app.post("/api/diagnose")
 def diagnose(_: None = Depends(auth_required)) -> Dict[str, Any]:
-    """分步诊断：账号配置 -> 登录 -> 课程列表 -> 抽样课程的作业/考试。"""
+    """分步诊断：学习通（账号/登录/课程/抽样） + 雨课堂（Cookie/课程/章节叶子）。"""
     import time as _time
+    from collections import Counter
 
     from cxreminder.client import ChaoxingClient
     from cxreminder.utils import now_in
+    from cxreminder.yuketang import YuketangClient, _pick, _walk_leaves
 
     eng = engine()
     cfg = eng.cfg
     steps: List[Dict[str, Any]] = []
+    ok_all = True
 
     def add(name: str, ok: bool, detail: str, cost: float = 0.0) -> None:
-        steps.append({"name": name, "ok": ok, "detail": detail,
-                      "cost": round(cost, 1)})
+        nonlocal ok_all
+        ok_all = ok_all and ok
+        steps.append({"name": name, "ok": ok, "detail": detail, "cost": round(cost, 1)})
 
-    if not (cfg.account.cookie or (cfg.account.username and cfg.account.password)):
-        add("账号配置", False, "尚未填写学习通账号或 Cookie")
+    cx_ready = bool(cfg.account.cookie or (cfg.account.username and cfg.account.password))
+    yt_ready = bool(cfg.yuketang.enabled and cfg.yuketang.cookie)
+
+    if not cx_ready and not yt_ready:
+        add("账号配置", False, "既没有配置学习通账号，也没有配置雨课堂 Cookie")
         return {"ok": False, "steps": steps}
 
-    masked = cfg.account.username
-    if len(masked) >= 7:
-        masked = masked[:3] + "****" + masked[-2:]
-    add("账号配置", True, f"{masked or 'Cookie 登录'}")
-
-    client = ChaoxingClient(cfg)
-    t0 = _time.time()
-    try:
-        client.login()
-        add("登录学习通", True, "登录态有效" if not cfg.account.cookie else "Cookie 有效",
-            _time.time() - t0)
-    except Exception as exc:  # noqa: BLE001
-        add("登录学习通", False, str(exc)[:300], _time.time() - t0)
-        return {"ok": False, "steps": steps}
-
-    t0 = _time.time()
-    try:
-        courses = client.fetch_courses()
-        add("获取课程列表", True, f"{len(courses)} 门课程", _time.time() - t0)
-    except Exception as exc:  # noqa: BLE001
-        add("获取课程列表", False, str(exc)[:300], _time.time() - t0)
-        return {"ok": False, "steps": steps}
-
-    now = now_in(cfg.timezone)
-    total_tasks = 0
-    sample = courses[:2]
-    for course in sample:
+    # ------------------------------------------------ 学习通
+    if not cx_ready:
+        add("学习通", True, "未配置，已跳过")
+    else:
+        masked = cfg.account.username
+        if len(masked) >= 7:
+            masked = masked[:3] + "****" + masked[-2:]
+        add("学习通账号", True, masked or "Cookie 登录")
+        client = ChaoxingClient(cfg)
         t0 = _time.time()
         try:
-            tasks = client.fetch_course_tasks(course)
+            client.login()
+            add("学习通登录", True, "登录态有效", _time.time() - t0)
         except Exception as exc:  # noqa: BLE001
-            add(f"读取《{course.name[:14]}》", False, str(exc)[:200], _time.time() - t0)
-            continue
-        total_tasks += len(tasks)
-        pending = [t for t in tasks if t.is_pending(cfg.remind, now)]
-        detail = f"共 {len(tasks)} 条，待办 {len(pending)} 条"
-        if tasks:
-            detail += "；示例：" + tasks[0].title[:24]
-        add(f"读取《{course.name[:14]}》", True, detail, _time.time() - t0)
+            add("学习通登录", False, str(exc)[:300], _time.time() - t0)
+            client = None
+        if client is not None:
+            t0 = _time.time()
+            try:
+                courses = client.fetch_courses()
+                add("学习通课程", True, f"{len(courses)} 门课程", _time.time() - t0)
+                now = now_in(cfg.timezone)
+                for course in courses[:2]:
+                    t0 = _time.time()
+                    try:
+                        tasks = client.fetch_course_tasks(course)
+                    except Exception as exc:  # noqa: BLE001
+                        add(f"学习通《{course.name[:12]}》", False, str(exc)[:200],
+                            _time.time() - t0)
+                        continue
+                    pending = [t for t in tasks if t.is_pending(cfg.remind, now)]
+                    detail = f"共 {len(tasks)} 条，待办 {len(pending)} 条"
+                    if tasks:
+                        detail += "；示例：" + tasks[0].title[:20]
+                    add(f"学习通《{course.name[:12]}》", True, detail, _time.time() - t0)
+            except Exception as exc:  # noqa: BLE001
+                add("学习通课程", False, str(exc)[:300], _time.time() - t0)
 
-    add("结论", True,
-        f"连接正常。已抽检 {len(sample)} 门课共 {total_tasks} 条记录；"
-        f"完整数据请点「立即检测」全量刷新。")
-    return {"ok": True, "steps": steps, "courses": len(courses)}
+    # ------------------------------------------------ 雨课堂
+    if not yt_ready:
+        add("雨课堂", True, "未配置，已跳过")
+    else:
+        yt = YuketangClient(cfg)
+        add("雨课堂配置", True, f"Cookie 尾号 …{cfg.yuketang.cookie[-6:]}")
+        t0 = _time.time()
+        try:
+            info = yt.login()
+            name = _pick(info, "name", "nickname", "school_number", default="已登录")
+            add("雨课堂登录", True, str(name)[:40], _time.time() - t0)
+        except Exception as exc:  # noqa: BLE001
+            add("雨课堂登录", False, str(exc)[:300], _time.time() - t0)
+            yt = None
+        if yt is not None:
+            t0 = _time.time()
+            try:
+                courses = yt.fetch_courses()
+                add("雨课堂课程", True, f"{len(courses)} 门课程", _time.time() - t0)
+            except Exception as exc:  # noqa: BLE001
+                add("雨课堂课程", False, str(exc)[:300], _time.time() - t0)
+                courses = []
+
+            for course in courses[:2]:
+                t0 = _time.time()
+                try:
+                    tasks = yt.fetch_course_tasks(course)
+                except Exception as exc:  # noqa: BLE001
+                    add(f"雨课堂《{course.label[:12]}》", False, str(exc)[:200],
+                        _time.time() - t0)
+                    continue
+                kinds = Counter(t.kind for t in tasks)
+                detail = (f"共 {len(tasks)} 条（作业 {kinds.get('homework', 0)} / "
+                          f"考试 {kinds.get('exam', 0)}）")
+                if tasks:
+                    detail += "；示例：" + tasks[0].title[:20]
+                else:
+                    try:
+                        raw = yt.request(
+                            "GET", "/mooc-api/v1/lms/learn/course/chapter",
+                            params={"cid": course.cid, "classroom_id": course.classroom_id},
+                        )
+                        leaves = _walk_leaves((raw.get("data") or {}) if isinstance(raw, dict) else {})
+                        types = Counter(str(_pick(l, "leaf_type", "leafType", "type")) for l in leaves)
+                        detail += f"；章节叶子 {len(leaves)} 个，类型分布 {dict(types)}"
+                    except Exception:  # noqa: BLE001
+                        pass
+                add(f"雨课堂《{course.label[:12]}》", True, detail, _time.time() - t0)
+
+    add("结论", ok_all,
+        "连接正常" if ok_all else "存在异常，详见上方步骤")
+    return {"ok": ok_all, "steps": steps}
 
 
 @app.post("/api/test-notify")

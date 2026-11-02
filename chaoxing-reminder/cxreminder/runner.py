@@ -222,6 +222,12 @@ class Runner:
             logger.exception("采集阶段发生未预期异常")
             errors.append(f"未预期异常：{exc}")
 
+        if self.cfg.yuketang.enabled and self.cfg.yuketang.cookie:
+            yt_tasks, yt_courses, yt_errors = self._collect_yuketang()
+            all_tasks.extend(yt_tasks)
+            courses += yt_courses
+            errors.extend(yt_errors)
+
         now = now_in(self.tz)
         # summary 保留全量待办（含用户忽略的），提醒只针对未忽略的
         pending = [t for t in all_tasks if t.is_pending(self.cfg.remind, now)]
@@ -264,6 +270,30 @@ class Runner:
         self.state.save()
         self._write_summary(summary)
         return summary
+
+    def _collect_yuketang(self):
+        """采集长江雨课堂的作业与考试（失败不影响学习通侧结果）。"""
+        from .yuketang import YuketangAuthError, YuketangClient, YuketangError
+
+        tasks: List[Task] = []
+        errors: List[str] = []
+        try:
+            client = YuketangClient(self.cfg)
+            client.login()
+            courses = client.fetch_courses()
+        except YuketangAuthError as exc:
+            return tasks, 0, [f"雨课堂登录失败：{exc}"]
+        except Exception as exc:  # noqa: BLE001
+            return tasks, 0, [f"雨课堂异常：{exc}"]
+
+        for course in courses:
+            try:
+                tasks.extend(client.fetch_course_tasks(course))
+            except YuketangError as exc:
+                errors.append(f"雨课堂《{course.label}》：{exc}")
+            time.sleep(0.3)
+        logger.info("雨课堂：%d 门课程，%d 条待办", len(courses), len(tasks))
+        return tasks, len(courses), errors
 
     def ignored_keys(self) -> set:
         """用户手动忽略的任务不参与提醒（与网页共用 data/ignored.json）。"""

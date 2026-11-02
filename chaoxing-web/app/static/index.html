@@ -148,6 +148,17 @@
     </fieldset>
 
     <fieldset>
+      <legend>长江雨课堂（可选）</legend>
+      <label class="field"><span>Cookie（浏览器里的 sessionid）</span>
+        <textarea id="f-ytcookie" rows="2" placeholder="sessionid=...; csrftoken=..."></textarea>
+      </label>
+      <label class="check">
+        <input type="checkbox" id="f-ytenable"><span>启用雨课堂采集（作业 + 考试）</span>
+      </label>
+      <p class="hint" id="hint-yt"></p>
+    </fieldset>
+
+    <fieldset>
       <legend>推送通道</legend>
       <label class="field"><span>企业微信机器人 Webhook</span>
         <input id="f-wecom" name="wecom" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...">
