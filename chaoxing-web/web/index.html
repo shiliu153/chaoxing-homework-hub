@@ -6,7 +6,7 @@
 <title>学习通待办中心</title>
 <meta name="theme-color" content="#0e1116">
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="style.css?v=20261102c">
+<link rel="stylesheet" href="style.css?v=20261102d">
 </head>
 <body>
 
@@ -236,7 +236,18 @@
     <h2>雨课堂扫码登录</h2>
     <button class="btn tiny" id="qr-close">关闭</button>
   </div>
-  <img id="qr-img" class="qr-img" alt="雨课堂登录二维码">
+  <div class="qr-box">
+    <img id="qr-img" class="qr-img hidden" alt="雨课堂登录二维码">
+    <div class="qr-layer" id="qr-loading">
+      <span class="spinner"></span>
+      <span id="qr-loading-text">正在生成二维码…</span>
+    </div>
+    <div class="qr-layer qr-fail hidden" id="qr-fail">
+      <span class="qr-fail-icon">!</span>
+      <span id="qr-fail-text">二维码加载失败</span>
+      <button type="button" class="btn tiny" id="qr-retry">重试</button>
+    </div>
+  </div>
   <p class="qr-status" id="qr-status">正在生成二维码…</p>
   <div class="qr-acts">
     <button class="btn tiny" id="qr-refresh">刷新二维码</button>
@@ -244,8 +255,21 @@
   <p class="hint">用微信扫一扫，并在手机上点「确认登录」。登录成功后 Cookie 会自动写入服务器配置。</p>
 </div>
 
+<!-- 登录状态提醒 -->
+<div id="alert-mask" class="mask top hidden"></div>
+<div id="alert-modal" class="alert-modal hidden" role="alertdialog" aria-modal="true">
+  <div class="alert-head">
+    <h2 id="alert-title">登录状态提醒</h2>
+    <p class="alert-sub" id="alert-sub"></p>
+  </div>
+  <div class="alert-body" id="alert-body"></div>
+  <div class="alert-acts">
+    <button class="btn tiny" id="alert-later">稍后提醒</button>
+  </div>
+</div>
+
 <div id="toast" class="toast"></div>
-<script src="config.js?v=20261102c"></script>
-<script src="app.js?v=20261102c"></script>
+<script src="config.js?v=20261102d"></script>
+<script src="app.js?v=20261102d"></script>
 </body>
 </html>

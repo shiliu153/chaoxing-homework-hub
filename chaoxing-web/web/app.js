@@ -59,8 +59,10 @@
     opts.headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
     var resp = await fetch(API_BASE + path, opts);
     if (resp.status === 401) {
-      showAuth();
-      throw new Error("未登录或登录已过期");
+      handleSessionLost();
+      var lost = new Error("未登录或登录已过期");
+      lost.sessionLost = true;   // 已弹窗提示，调用方不要再 toast
+      throw lost;
     }
     var data = {};
     try { data = await resp.json(); } catch (e) { data = {}; }
@@ -261,6 +263,7 @@
     renderTopbar(d);
     renderTasks(d);
     renderEvents(d);
+    checkAuthAlerts(d);
   }
 
   // ---------------------------------------------------------------- 倒计时
@@ -402,7 +405,7 @@
         if (Date.now() - started > 180000) clearInterval(state.polling);
       }, 2500);
     } catch (e) {
-      toast(e.message || "触发失败", "error");
+      if (!e || !e.sessionLost) toast(e.message || "触发失败", "error");
     }
   }
 
@@ -478,12 +481,148 @@
     }
   }
 
+  // ---------------- 登录状态提醒 ----------------
+  // 两端（学习通 / 雨课堂）任一侧未绑定或登录失效时弹窗；同一状态 30 分钟内不重复打扰。
+  var AUTH_META = {
+    chaoxing: {
+      unbound: { title: "尚未绑定学习通账号", text: "绑定后才能采集作业与考试。",
+                 action: { label: "去绑定", act: "settings" } },
+      expired: { title: "学习通登录已失效", text: "请到「设置」重新填写学习通账号密码。",
+                 action: { label: "去设置", act: "settings" } }
+    },
+    yuketang: {
+      unbound: { title: "尚未绑定雨课堂", text: "扫码登录后可采集雨课堂考试。",
+                 action: { label: "扫码登录", act: "qr" } },
+      expired: { title: "雨课堂登录已失效", text: "Cookie 已过期，请重新扫码登录。",
+                 action: { label: "重新扫码", act: "qr" } }
+    }
+  };
+
+  function readAlertMark() {
+    try { return JSON.parse(localStorage.getItem("cx_auth_alert") || "{}") || {}; }
+    catch (e) { return {}; }
+  }
+
+  function writeAlertMark(obj) {
+    try { localStorage.setItem("cx_auth_alert", JSON.stringify(obj)); } catch (e) { /* 隐私模式忽略 */ }
+  }
+
+  function openAlert(opts) {
+    $("#alert-title").textContent = opts.title || "提醒";
+    $("#alert-sub").textContent = opts.sub || "";
+    $("#alert-body").innerHTML = (opts.items || []).map(function (it) {
+      var btn = it.action
+        ? '<button class="btn tiny alert-act" data-act="' + esc(it.action.act) + '">' +
+          esc(it.action.label) + "</button>"
+        : "";
+      var extra = it.detail ? '<p class="alert-err">' + esc(it.detail) + "</p>" : "";
+      return '<div class="alert-item"><span class="alert-dot ' + (it.tone || "warn") + '"></span>' +
+        "<div><h3>" + esc(it.title || "") + "</h3><p>" + esc(it.text || "") + "</p>" +
+        extra + btn + "</div></div>";
+    }).join("");
+    $("#alert-later").textContent = opts.laterLabel || "稍后提醒";
+    $("#alert-mask").classList.remove("hidden");
+    $("#alert-modal").classList.remove("hidden");
+  }
+
+  function closeAlert() {
+    $("#alert-mask").classList.add("hidden");
+    $("#alert-modal").classList.add("hidden");
+  }
+
+  function authIssues(d) {
+    var a = (d && d.auth) || {};
+    var out = [];
+    ["chaoxing", "yuketang"].forEach(function (key) {
+      var it = a[key];
+      if (!it) return;
+      if (it.state === "unbound" || it.state === "expired") {
+        out.push({
+          source: key,
+          state: it.state,
+          label: it.label || key,
+          detail: it.detail || ""
+        });
+      }
+    });
+    return out;
+  }
+
+  function checkAuthAlerts(d) {
+    if (!auth.user) return;
+    var issues = authIssues(d);
+    if (!issues.length) {
+      writeAlertMark({ sig: "", at: 0 });   // 都恢复正常，重置提醒记忆
+      return;
+    }
+    var sig = issues.map(function (i) {
+      return i.source + ":" + i.state + ":" + i.detail;
+    }).join("|");
+    var anyExpired = issues.some(function (i) { return i.state === "expired"; });
+    // 失效需要尽快处理（30 分钟一提醒）；单纯未绑定 12 小时提醒一次即可
+    var snooze = anyExpired ? 30 * 60 * 1000 : 12 * 60 * 60 * 1000;
+    var mark = readAlertMark();
+    var now = Date.now();
+    if (mark.sig === sig && now - (mark.at || 0) < snooze) return;
+
+    writeAlertMark({ sig: sig, at: now });
+    openAlert({
+      title: anyExpired ? "有账号登录已失效" : "还有账号未绑定",
+      sub: anyExpired ? "相关采集已暂停，重新登录后会自动恢复。" : "绑定后系统才开始采集对应平台的待办。",
+      items: issues.map(function (i) {
+        var meta = (AUTH_META[i.source] || {})[i.state] || {};
+        return {
+          tone: i.state === "expired" ? "bad" : "warn",
+          title: meta.title || (i.label + "需要登录"),
+          text: meta.text || i.detail,
+          detail: i.state === "expired" ? i.detail : "",
+          action: meta.action
+        };
+      })
+    });
+  }
+
+  var sessionLostShown = false;
+
+  function handleSessionLost() {
+    var wasLoggedIn = !!auth.user && !$("#app").classList.contains("hidden");
+    showAuth();
+    if (!wasLoggedIn || sessionLostShown) return;
+    sessionLostShown = true;
+    openAlert({
+      title: "登录状态已失效",
+      sub: "登录已过期或已在其他设备退出，请重新登录。",
+      laterLabel: "关闭",
+      items: [{
+        tone: "bad",
+        title: "需要重新登录",
+        text: "重新登录后会回到原来的看板，账号绑定与忽略记录都不会丢失。",
+        action: { label: "重新登录", act: "login" }
+      }]
+    });
+  }
+
   // ---------------- 雨课堂扫码登录 ----------------
-  var qrState = { id: "", timer: null };
+  var qrState = { id: "", timer: null, loadTimer: null };
 
   function stopQrPolling() {
     if (qrState.timer) clearInterval(qrState.timer);
+    if (qrState.loadTimer) clearTimeout(qrState.loadTimer);
     qrState.timer = null;
+    qrState.loadTimer = null;
+  }
+
+  // mode: loading（转圈）| image（显示二维码）| fail（失败/过期）
+  function qrSetState(mode, text) {
+    var img = $("#qr-img");
+    $("#qr-loading").classList.toggle("hidden", mode !== "loading");
+    $("#qr-fail").classList.toggle("hidden", mode !== "fail");
+    if (mode === "loading" && text) $("#qr-loading-text").textContent = text;
+    if (mode === "fail") $("#qr-fail-text").textContent = text || "二维码加载失败";
+    if (mode !== "image") {
+      img.classList.add("hidden");
+      img.removeAttribute("src");
+    }
   }
 
   function closeQrModal() {
@@ -495,17 +634,46 @@
 
   async function startYtLogin() {
     stopQrPolling();
+    closeAlert();
+    closeSettings();
     $("#qr-mask").classList.remove("hidden");
     $("#qr-modal").classList.remove("hidden");
     $("#qr-status").textContent = "正在生成二维码…";
-    $("#qr-img").removeAttribute("src");
+    qrSetState("loading", "正在获取二维码…");
     try {
       var r = await api("/yuketang/login/start", { method: "POST" });
       qrState.id = r.id;
-      $("#qr-img").src = API_BASE + "/yuketang/login/qr?id=" + encodeURIComponent(r.id) + "&t=" + Date.now();
+
+      // 图片就绪前一直显示加载圈，避免出现裂图
+      var img = $("#qr-img");
+      var settled = false;
+      img.onload = function () {
+        settled = true;
+        if (qrState.loadTimer) { clearTimeout(qrState.loadTimer); qrState.loadTimer = null; }
+        img.classList.remove("hidden");
+        $("#qr-loading").classList.add("hidden");
+      };
+      img.onerror = function () {
+        settled = true;
+        if (qrState.loadTimer) { clearTimeout(qrState.loadTimer); qrState.loadTimer = null; }
+        qrSetState("fail", "二维码加载失败，请点「重试」");
+        $("#qr-status").textContent = "二维码加载失败";
+      };
+
+      qrSetState("loading", "二维码加载中…");
+      img.src = API_BASE + "/yuketang/login/qr?id=" +
+        encodeURIComponent(r.id) + "&t=" + Date.now();
+
       $("#qr-status").textContent = "请用微信扫码，并在手机上确认登录";
       qrState.timer = setInterval(pollYtLogin, 3000);
+      qrState.loadTimer = setTimeout(function () {
+        if (!settled) {
+          qrSetState("fail", "二维码加载超时，请点「重试」");
+          $("#qr-status").textContent = "二维码加载超时";
+        }
+      }, 15000);
     } catch (e) {
+      qrSetState("fail", "二维码生成失败");
       $("#qr-status").textContent = "生成失败：" + (e.message || "未知错误");
     }
   }
@@ -529,9 +697,11 @@
         }, 800);
       } else if (s.status === "expired") {
         stopQrPolling();
+        qrSetState("fail", "二维码已过期，请点「重试」");
         $("#qr-status").textContent = "二维码已过期，点「刷新二维码」重试";
       } else if (s.status === "failed") {
         stopQrPolling();
+        qrSetState("fail", s.detail || "登录失败，请重试");
         $("#qr-status").textContent = s.detail || "登录失败，请重试";
       }
     } catch (e) {
@@ -618,13 +788,14 @@
           });
         }
         auth.user = r.user;
+        sessionLostShown = false;
         renderUser();
         $("#auth-password").value = "";
         showApp();
         await load();
         if (auth.mode === "register") {
-          toast("注册成功，请先在「设置」里绑定学习通账号", "ok");
-          openSettings();
+          toast("注册成功，请先绑定学习通账号", "ok");
+          if ($("#alert-modal").classList.contains("hidden")) openSettings();
         }
       } catch (err) {
         $("#auth-hint").textContent = err.message || "操作失败";
@@ -674,6 +845,19 @@
     $("#qr-close").addEventListener("click", closeQrModal);
     $("#qr-mask").addEventListener("click", closeQrModal);
     $("#qr-refresh").addEventListener("click", startYtLogin);
+    $("#qr-retry").addEventListener("click", startYtLogin);
+
+    $("#alert-mask").addEventListener("click", closeAlert);
+    $("#alert-later").addEventListener("click", closeAlert);
+    $("#alert-body").addEventListener("click", function (e) {
+      var btn = e.target.closest("[data-act]");
+      if (!btn) return;
+      var act = btn.getAttribute("data-act");
+      closeAlert();
+      if (act === "settings") openSettings();
+      else if (act === "qr") startYtLogin();
+      else if (act === "login") showAuth();
+    });
     $("#btn-logs").addEventListener("click", showLogs);
     $("#btn-logs-close").addEventListener("click", function () {
       $("#logs-panel").classList.add("hidden");
@@ -739,7 +923,7 @@
     });
 
     document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape") { closeSettings(); closeDetail(); }
+      if (e.key === "Escape") { closeSettings(); closeDetail(); closeAlert(); }
     });
   }
 

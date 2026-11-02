@@ -277,3 +277,45 @@ sudo systemctl start chaoxing-web
 ```
 
 回滚会把 `data/` 恢复成单用户结构，迁移后新产生的 `users/` 会被覆盖，先另存一份。
+
+## 11. 登录态体验（2026-11-02）
+
+### 11.1 二维码加载态
+
+弹窗结构改为三层叠放（`web/index.html`）：
+
+```html
+<div class="qr-box">
+  <img id="qr-img" class="qr-img hidden">          <!-- 就绪前不设 src，避免裂图 -->
+  <div class="qr-layer" id="qr-loading"><span class="spinner"></span>…</div>
+  <div class="qr-layer qr-fail hidden" id="qr-fail">…<button id="qr-retry">重试</button></div>
+</div>
+```
+
+- `startYtLogin()` 先切到 loading，拿到 sid 后再赋 `src`；`img.onload` 才显示图片。
+- `img.onerror` 与 15 秒超时都会切到失败态，文案说明原因并提供「重试」。
+- 轮询返回 `expired` / `failed` 时同样切失败态，避免用户扫到已失效的码。
+
+### 11.2 登录状态提醒
+
+后端在 `overview` 里给出 `auth`（见 `engine.source_auth()`）：
+
+| state | 含义 | 前端行为 |
+| --- | --- | --- |
+| `ok` | 已绑定且最近一轮无鉴权错误 | 不提示 |
+| `unbound` | 未配置账号 / Cookie | 弹窗「还有账号未绑定」，12 小时一次 |
+| `expired` | 最近一轮报「登录/鉴权失败」 | 弹窗「有账号登录已失效」+ 原始错误，30 分钟一次 |
+| `unknown` | 已绑定但还没跑过 | 不提示 |
+
+- 弹窗里每项都有直达按钮：学习通 → 打开设置抽屉；雨课堂 → 直接开扫码弹窗。
+- 提醒记忆存 `localStorage.cx_auth_alert`（`{sig, at}`），状态签名变化才重新提醒。
+- 网页会话失效时 `handleSessionLost()` 会先弹窗再回登录页；`api()` 抛出的错误带
+  `sessionLost=true`，调用方不再重复 toast。
+
+### 11.3 验证
+
+- 本地：注册新用户 → 弹出「尚未绑定学习通/雨课堂」两项；点「去绑定」打开设置；
+  设假凭据并跑一轮 → 弹出「有账号登录已失效」并显示原始错误；清 Cookie 后点检测 →
+  弹出「登录状态已失效」。
+- 线上：admin 两端均 `ok`，登录后无弹窗；扫码弹窗在延迟图片 2 秒的情况下先显示加载圈，
+  加载完成后正常显示二维码（`naturalWidth=470`）。

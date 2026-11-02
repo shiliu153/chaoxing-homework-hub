@@ -320,6 +320,59 @@ class Engine:
 
     # ------------------------------------------------------------ 视图
 
+    def source_auth(self) -> Dict[str, Dict[str, str]]:
+        """两端（学习通 / 雨课堂）的登录状态，供前端弹窗提醒。
+
+        状态取值：
+        - ok       已绑定，最近一次采集没有鉴权错误
+        - unbound  还没绑定（学习通无账号、雨课堂无 Cookie）
+        - expired  已绑定，但最近一次采集报告登录/鉴权失败（需要重新登录）
+        - unknown  已绑定，但还没跑过一轮，无法判断
+        """
+        errors = [str(e) for e in (self.last_summary.get("errors") or [])]
+        ran = self.last_run is not None
+
+        def find_error(*keywords: str) -> str:
+            for err in errors:
+                if all(k in err for k in keywords):
+                    return err[:180]
+            return ""
+
+        # ---- 学习通：账号密码或 Cookie 任一存在即视为已绑定
+        auth_cfg = self.cfg.account
+        cx_bound = bool(auth_cfg.cookie or (auth_cfg.username and auth_cfg.password))
+        cx_error = find_error("登录/鉴权失败")
+        if not cx_bound:
+            cx = {"state": "unbound", "detail": "尚未绑定学习通账号"}
+        elif cx_error:
+            cx = {"state": "expired", "detail": cx_error}
+        elif not ran:
+            cx = {"state": "unknown", "detail": "等待首次检测"}
+        else:
+            cx = {"state": "ok", "detail": "登录正常"}
+
+        # ---- 雨课堂：只能用 Cookie，且必须显式启用
+        yt_cfg = self.cfg.yuketang
+        yt_bound = bool(yt_cfg.enabled and yt_cfg.cookie)
+        yt_error = ""
+        for err in errors:
+            if "雨课堂" in err and any(w in err for w in ("登录", "Cookie", "鉴权", "401")):
+                yt_error = err[:180]
+                break
+        if not yt_bound:
+            yt = {"state": "unbound", "detail": "尚未绑定雨课堂"}
+        elif yt_error:
+            yt = {"state": "expired", "detail": yt_error}
+        elif not ran:
+            yt = {"state": "unknown", "detail": "等待首次检测"}
+        else:
+            yt = {"state": "ok", "detail": "登录正常"}
+
+        return {
+            "chaoxing": {"label": "学习通", **cx},
+            "yuketang": {"label": "雨课堂", **yt},
+        }
+
     def overview(self, now: Optional[datetime] = None) -> Dict[str, Any]:
         now = now or now_in(self.tz_name)
         ignored = self.read_ignored()
@@ -396,4 +449,5 @@ class Engine:
                 self.cfg.account.cookie
                 or (self.cfg.account.username and self.cfg.account.password)
             ),
+            "auth": self.source_auth(),
         }

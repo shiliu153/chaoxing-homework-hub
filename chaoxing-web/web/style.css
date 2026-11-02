@@ -448,7 +448,32 @@ legend { font-size: 12px; color: var(--accent); letter-spacing: .4px; padding: 0
 }
 .qr-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .qr-head h2 { margin: 0; font-size: 14px; }
-.qr-img { width: 240px; height: 240px; background: #fff; border-radius: 8px; display: block; margin: 4px auto 10px; }
+/* 二维码容器：图片、加载圈、失败态三层叠放，避免出现裂图 */
+.qr-box {
+  position: relative; width: 240px; height: 240px;
+  margin: 4px auto 10px; background: #fff;
+  border-radius: 8px; overflow: hidden;
+}
+.qr-img { width: 240px; height: 240px; display: block; }
+.qr-layer {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; background: #fff; color: #5b6b7c; font-size: 12.5px;
+  text-align: center; padding: 0 18px;
+}
+.spinner {
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 2.5px solid rgba(90, 120, 150, .22);
+  border-top-color: #3d7fd6;
+  animation: rotate .8s linear infinite;
+}
+.qr-fail-icon {
+  width: 30px; height: 30px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(224, 92, 92, .12); color: #d9534f;
+  font-weight: 700; font-size: 16px;
+}
+.qr-fail .btn { margin-top: 2px; color: #3d6c99; border-color: #c3d4e4; }
 .qr-status { font-size: 12.5px; color: var(--text-dim); margin: 0 0 10px; min-height: 18px; }
 .qr-acts { display: flex; justify-content: center; gap: 8px; margin-bottom: 6px; }
 
@@ -460,3 +485,29 @@ legend { font-size: 12px; color: var(--accent); letter-spacing: .4px; padding: 0
 }
 .auth-tabs .tab { flex: 1; text-align: center; }
 .auth-tabs .tab.active { background: #23303d; color: var(--text); }
+
+/* ---------------- 登录状态提醒弹窗 ---------------- */
+.mask.top { z-index: 66; }
+.alert-modal {
+  position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: 420px; max-width: 92vw; max-height: 82vh; overflow: auto;
+  background: var(--bg-soft); border: 1px solid var(--line);
+  border-radius: 14px; z-index: 70; padding: 18px 20px 14px;
+  box-shadow: var(--shadow);
+}
+.alert-head h2 { margin: 0 0 4px; font-size: 15px; }
+.alert-sub { margin: 0 0 14px; font-size: 12px; color: var(--text-mute); }
+.alert-item {
+  display: grid; grid-template-columns: 9px 1fr; gap: 11px;
+  padding: 11px 13px; margin-bottom: 9px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: #121922;
+}
+.alert-dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 5px; }
+.alert-dot.warn { background: #e0a44a; box-shadow: 0 0 0 3px rgba(224, 164, 74, .14); }
+.alert-dot.bad { background: #e05c5c; box-shadow: 0 0 0 3px rgba(224, 92, 92, .14); }
+.alert-item h3 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+.alert-item p { margin: 0; font-size: 12px; line-height: 1.65; color: var(--text-dim); word-break: break-all; }
+.alert-err { margin-top: 5px !important; font-size: 11.5px !important; color: var(--text-mute) !important; }
+.alert-act { margin-top: 9px; }
+.alert-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
