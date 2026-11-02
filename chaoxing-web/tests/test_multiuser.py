@@ -67,6 +67,8 @@ class MultiUserTest(unittest.TestCase):
         me = c.get("/api/v1/auth/me").json()
         self.assertTrue(me["authenticated"])
         self.assertEqual(me["user"]["username"], "alice_01")
+        # 注册只提交用户名和密码，昵称默认等于用户名
+        self.assertEqual(me["user"]["display_name"], "alice_01")
         self.assertFalse(me["account_ready"])
 
     def test_duplicate_and_weak_password(self):

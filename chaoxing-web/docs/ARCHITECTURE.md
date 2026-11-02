@@ -52,8 +52,8 @@
 ### 4.1 注册
 
 ```
-① 前端 POST /api/v1/auth/register {username, password, display_name?, invite_code?}
-② 后端校验：用户名 3-32 位 / 密码 ≥8 位 / 邀请码（若开启）/ 同名冲突 → 409
+① 前端 POST /api/v1/auth/register {username, password}
+② 后端校验：用户名 3-32 位 / 密码 ≥8 位 / 同名冲突 → 409（只有这两个字段，昵称默认等于用户名）
 ③ store.create_user()：scrypt 哈希入 users 表
 ④ tenancy.ensure_workspace(uid)：建 data/users/<uid>/ 与初始 config.yaml
 ⑤ manager.start_user(uid)：为该用户拉起采集线程（账号为空时不会真的请求）
@@ -195,6 +195,6 @@ data/
    并在 `load_config` 前解密。
 2. **没有配额**：单个用户可把轮询间隔调到 60 秒，会占用全局并发名额。生产环境建议加
    `min_interval` 限制或按用户限流。
-3. **注册默认开放**：设置 `CX_ALLOW_REGISTRATION=0` 关闭注册，或设置 `CX_INVITE_CODE` 启用邀请码。
+3. **注册默认开放且只需用户名 + 密码**：设置 `CX_ALLOW_REGISTRATION=0` 可关闭注册。
 4. **单 worker**：扫码会话存在进程内存，因此必须 `--workers 1`；要多副本需把会话挪到 Redis。
 5. **没有找回密码/邮件验证**：忘记密码需要管理员在服务器上重置（见部署文档）。

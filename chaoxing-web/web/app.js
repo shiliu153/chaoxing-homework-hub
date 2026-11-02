@@ -93,8 +93,6 @@
     document.querySelectorAll("#auth-tabs .tab").forEach(function (t) {
       t.classList.toggle("active", t.getAttribute("data-auth") === mode);
     });
-    $("#auth-display-wrap").classList.toggle("hidden", mode !== "register");
-    $("#auth-invite-wrap").classList.toggle("hidden", mode !== "register");
     $("#auth-btn").textContent = mode === "register" ? "注册并登录" : "登录";
     $("#auth-password").setAttribute(
       "autocomplete", mode === "register" ? "new-password" : "current-password");
@@ -611,12 +609,7 @@
         if (auth.mode === "register") {
           r = await api("/auth/register", {
             method: "POST",
-            body: JSON.stringify({
-              username: username,
-              password: password,
-              display_name: $("#auth-display").value.trim(),
-              invite_code: $("#auth-invite").value.trim()
-            })
+            body: JSON.stringify({ username: username, password: password })
           });
         } else {
           r = await api("/auth/login", {

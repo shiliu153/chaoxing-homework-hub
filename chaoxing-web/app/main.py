@@ -37,7 +37,6 @@ FRONTEND_DIR = os.environ.get("CX_FRONTEND_DIR", os.path.join(PROJECT_DIR, "web"
 COOKIE_NAME = "cx_session"
 SESSION_DAYS = 30
 ALLOW_REGISTRATION = os.environ.get("CX_ALLOW_REGISTRATION", "1") != "0"
-INVITE_CODE = os.environ.get("CX_INVITE_CODE", "").strip()
 MAX_CONCURRENT_POLLS = int(os.environ.get("CX_MAX_CONCURRENT_POLLS", "2") or 2)
 CORS_ORIGINS = [o.strip() for o in os.environ.get("CX_CORS_ORIGINS", "").split(",") if o.strip()]
 
@@ -53,10 +52,9 @@ USERNAME_RE = re.compile(r"^[A-Za-z0-9_.\-\u4e00-\u9fa5]{3,32}$")
 
 
 class RegisterPayload(BaseModel):
+    """注册只收用户名和密码，昵称默认等于用户名。"""
     username: str
     password: str
-    display_name: Optional[str] = None
-    invite_code: Optional[str] = None
 
 
 class LoginPayload(BaseModel):
@@ -229,9 +227,6 @@ def health() -> Dict[str, Any]:
 def register(payload: RegisterPayload, request: Request, response: Response) -> Dict[str, Any]:
     if not ALLOW_REGISTRATION:
         raise HTTPException(status_code=403, detail="站点已关闭注册，请联系管理员开通账号")
-    if INVITE_CODE and (payload.invite_code or "").strip() != INVITE_CODE:
-        raise HTTPException(status_code=403, detail="邀请码不正确")
-
     username = (payload.username or "").strip()
     if not USERNAME_RE.match(username):
         raise HTTPException(status_code=400, detail="用户名需 3-32 位，可用中英文、数字、下划线、点、横线")
@@ -247,8 +242,7 @@ def register(payload: RegisterPayload, request: Request, response: Response) -> 
         raise HTTPException(status_code=409, detail="该用户名已被占用")
 
     try:
-        user = store().create_user(username, payload.password,
-                                   (payload.display_name or "").strip() or username)
+        user = store().create_user(username, payload.password)
     except Exception as exc:  # noqa: BLE001 - 唯一约束等
         raise HTTPException(status_code=400, detail=str(exc)[:200]) from exc
 
