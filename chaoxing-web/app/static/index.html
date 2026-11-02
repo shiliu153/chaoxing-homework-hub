@@ -155,6 +155,7 @@
       <label class="check">
         <input type="checkbox" id="f-ytenable"><span>启用雨课堂采集（作业 + 考试）</span>
       </label>
+      <button type="button" class="btn tiny" id="btn-yt-qr">扫码登录 / 更新 Cookie</button>
       <p class="hint" id="hint-yt"></p>
     </fieldset>
 
@@ -199,6 +200,21 @@
     <a class="btn tiny" id="d-open" href="#" target="_blank" rel="noopener">在学习通打开</a>
   </div>
 </aside>
+
+<!-- 雨课堂扫码 -->
+<div id="qr-mask" class="mask hidden"></div>
+<div id="qr-modal" class="qr-modal hidden">
+  <div class="qr-head">
+    <h2>雨课堂扫码登录</h2>
+    <button class="btn tiny" id="qr-close">关闭</button>
+  </div>
+  <img id="qr-img" class="qr-img" alt="雨课堂登录二维码">
+  <p class="qr-status" id="qr-status">正在生成二维码…</p>
+  <div class="qr-acts">
+    <button class="btn tiny" id="qr-refresh">刷新二维码</button>
+  </div>
+  <p class="hint">用微信扫一扫，并在手机上点「确认登录」。登录成功后 Cookie 会自动写入服务器配置。</p>
+</div>
 
 <div id="toast" class="toast"></div>
 <script src="/static/app.js?v=20261101b"></script>

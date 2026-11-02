@@ -430,6 +430,67 @@
     }
   }
 
+  // ---------------- 雨课堂扫码登录 ----------------
+  var qrState = { id: "", timer: null };
+
+  function stopQrPolling() {
+    if (qrState.timer) clearInterval(qrState.timer);
+    qrState.timer = null;
+  }
+
+  function closeQrModal() {
+    stopQrPolling();
+    qrState.id = "";
+    $("#qr-modal").classList.add("hidden");
+    $("#qr-mask").classList.add("hidden");
+  }
+
+  async function startYtLogin() {
+    stopQrPolling();
+    $("#qr-mask").classList.remove("hidden");
+    $("#qr-modal").classList.remove("hidden");
+    $("#qr-status").textContent = "正在生成二维码…";
+    $("#qr-img").removeAttribute("src");
+    try {
+      var r = await api("/api/yt/login/start", { method: "POST" });
+      qrState.id = r.id;
+      $("#qr-img").src = "/api/yt/login/qr?id=" + encodeURIComponent(r.id) + "&t=" + Date.now();
+      $("#qr-status").textContent = "请用微信扫码，并在手机上确认登录";
+      qrState.timer = setInterval(pollYtLogin, 3000);
+    } catch (e) {
+      $("#qr-status").textContent = "生成失败：" + (e.message || "未知错误");
+    }
+  }
+
+  async function pollYtLogin() {
+    if (!qrState.id) return;
+    try {
+      var s = await api("/api/yt/login/status?id=" + encodeURIComponent(qrState.id));
+      if (s.status === "waiting") {
+        $("#qr-status").textContent = "等待扫码…";
+      } else if (s.status === "scanned") {
+        $("#qr-status").textContent = "已扫码，请在手机上点「确认登录」";
+      } else if (s.status === "ok") {
+        stopQrPolling();
+        $("#qr-status").textContent = "登录成功" + (s.user ? "：" + s.user : "");
+        toast("雨课堂登录成功" + (s.user ? "：" + s.user : ""), "ok");
+        setTimeout(function () {
+          closeQrModal();
+          load();
+          openSettings();
+        }, 800);
+      } else if (s.status === "expired") {
+        stopQrPolling();
+        $("#qr-status").textContent = "二维码已过期，点「刷新二维码」重试";
+      } else if (s.status === "failed") {
+        stopQrPolling();
+        $("#qr-status").textContent = s.detail || "登录失败，请重试";
+      }
+    } catch (e) {
+      /* 轮询失败不打断，等下一次 */
+    }
+  }
+
   async function testNotify() {
     try {
       var r = await api("/api/test-notify", { method: "POST" });
@@ -515,6 +576,10 @@
     $("#drawer-mask").addEventListener("click", closeSettings);
     $("#settings-form").addEventListener("submit", saveSettings);
     $("#btn-test-notify").addEventListener("click", testNotify);
+    $("#btn-yt-qr").addEventListener("click", startYtLogin);
+    $("#qr-close").addEventListener("click", closeQrModal);
+    $("#qr-mask").addEventListener("click", closeQrModal);
+    $("#qr-refresh").addEventListener("click", startYtLogin);
     $("#btn-logs").addEventListener("click", showLogs);
     $("#btn-logs-close").addEventListener("click", function () {
       $("#logs-panel").classList.add("hidden");

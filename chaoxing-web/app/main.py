@@ -184,6 +184,166 @@ def unignore(payload: KeyPayload, _: None = Depends(auth_required)) -> Dict[str,
     return {"ok": ok}
 
 
+# ------------------------------------------------------------------ 雨课堂扫码登录
+# 登录态放在进程内存里（服务单 worker），前端轮询 status 驱动流程，
+# 不依赖后台常驻线程，二维码过期可随时重开。
+
+_YT_LOGIN: Dict[str, Dict[str, Any]] = {}
+_YT_BASE = "https://changjiang.yuketang.cn"
+_YT_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+
+
+def _yt_session():
+    import requests
+
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": _YT_UA,
+        "xtbz": "ykt",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": _YT_BASE + "/v2/web/index",
+    })
+    return session
+
+
+@app.post("/api/yt/login/start")
+def yt_login_start(_: None = Depends(auth_required)) -> Dict[str, Any]:
+    import re as _re
+    import time as _time
+    import urllib.parse
+    import uuid as _uuid
+
+    session = _yt_session()
+    try:
+        resp = session.post(_YT_BASE + "/api/v3/user/login/wechat-auth-param", timeout=20)
+        payload = resp.json().get("data") or {}
+        appid, state, redirect = payload.get("appId"), payload.get("state"), payload.get("redirectUri")
+        if not (appid and state and redirect):
+            raise RuntimeError("未取到微信登录参数")
+
+        qr_url = (
+            "https://open.weixin.qq.com/connect/qrconnect?appid=%s&scope=snsapi_login"
+            "&redirect_uri=%s&state=%s&login_type=jssdk&self_redirect=default&style=black"
+            % (appid, urllib.parse.quote(redirect, safe=""), state)
+        )
+        page = session.get(qr_url, timeout=20).text
+        m = _re.search(r"/connect/qrcode/([A-Za-z0-9_\-]+)", page)
+        if not m:
+            raise RuntimeError("二维码解析失败，请稍后重试")
+        qr_uuid = m.group(1)
+        png = session.get(
+            "https://open.weixin.qq.com/connect/qrcode/%s" % qr_uuid, timeout=20
+        ).content
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"生成二维码失败：{exc}") from exc
+
+    sid = _uuid.uuid4().hex[:12]
+    _YT_LOGIN[sid] = {
+        "session": session,
+        "uuid": qr_uuid,
+        "state": state,
+        "redirect": redirect,
+        "png": png,
+        "created": _time.time(),
+        "status": "waiting",
+        "user": "",
+    }
+    # 只保留最近 5 个会话
+    for key in sorted(_YT_LOGIN, key=lambda k: _YT_LOGIN[k]["created"])[:-5]:
+        _YT_LOGIN.pop(key, None)
+    return {"id": sid, "expires_in": 300}
+
+
+@app.get("/api/yt/login/qr")
+def yt_login_qr(id: str, _: None = Depends(auth_required)) -> Response:
+    item = _YT_LOGIN.get(id)
+    if not item:
+        raise HTTPException(status_code=404, detail="二维码已失效，请重新获取")
+    return Response(content=item["png"], media_type="image/png",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/yt/login/status")
+def yt_login_status(id: str, _: None = Depends(auth_required)) -> Dict[str, Any]:
+    import json as _json
+    import re as _re
+    import time as _time
+
+    item = _YT_LOGIN.get(id)
+    if not item:
+        return {"status": "expired", "detail": "会话不存在，请重新获取二维码"}
+
+    if item["status"] == "ok":
+        return {"status": "ok", "user": item.get("user", "")}
+
+    if _time.time() - item["created"] > 290:
+        item["status"] = "expired"
+        return {"status": "expired", "detail": "二维码已过期"}
+
+    session = item["session"]
+    try:
+        resp = session.get(
+            "https://lp.open.weixin.qq.com/connect/l/qrconnect",
+            params={"uuid": item["uuid"], "_": int(_time.time() * 1000)},
+            timeout=10,
+            headers={"Referer": "https://open.weixin.qq.com/"},
+        )
+        text = resp.text
+    except Exception:  # noqa: BLE001
+        return {"status": "waiting", "detail": "等待扫码"}
+
+    m_code = _re.search(r"wx_code='([^']*)'", text)
+    code = m_code.group(1) if m_code else ""
+    if not code:
+        errcode = _re.search(r"wx_errcode=(\d+)", text)
+        if errcode and errcode.group(1) == "405":
+            item["status"] = "expired"
+            return {"status": "expired", "detail": "二维码已过期"}
+        if errcode and errcode.group(1) in ("404", "403"):
+            return {"status": "scanned", "detail": "已扫码，请在手机上确认"}
+        return {"status": "waiting", "detail": "等待扫码"}
+
+    # 已确认：换登录态
+    try:
+        session.get(
+            item["redirect"],
+            params={"path": "/v2/web/index", "code": code, "state": item["state"]},
+            allow_redirects=False,
+            timeout=20,
+        )
+        info = session.get(_YT_BASE + "/api/v3/user/basic-info", timeout=20).json()
+    except Exception as exc:  # noqa: BLE001
+        item["status"] = "failed"
+        return {"status": "failed", "detail": f"换取登录态失败：{exc}"}
+
+    if not info.get("data"):
+        item["status"] = "failed"
+        return {"status": "failed", "detail": "登录校验失败，请重新扫码"}
+
+    jar = {c.name: c.value for c in session.cookies}
+    keep = ("sessionid", "csrftoken", "universalAuthToken", "ucid", "uname")
+    cookie_str = "; ".join(f"{k}={v}" for k, v in jar.items() if k in keep)
+    if "sessionid" not in jar:
+        item["status"] = "failed"
+        return {"status": "failed", "detail": "未获取到 sessionid，请重新扫码"}
+
+    # 写入配置
+    raw = _read_config()
+    raw.setdefault("yuketang", {})
+    raw["yuketang"]["enabled"] = True
+    raw["yuketang"]["cookie"] = cookie_str
+    raw["yuketang"]["base_url"] = _YT_BASE
+    _write_config(raw)
+    engine().reload()
+
+    name = str((info.get("data") or {}).get("name") or "")
+    item["status"] = "ok"
+    item["user"] = name
+    logger.info("雨课堂扫码登录成功：%s", name)
+    return {"status": "ok", "user": name}
+
+
 @app.get("/api/logs")
 def logs(lines: int = 120, _: None = Depends(auth_required)) -> Dict[str, Any]:
     eng = engine()
