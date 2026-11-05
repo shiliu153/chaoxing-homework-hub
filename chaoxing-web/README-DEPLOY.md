@@ -319,3 +319,55 @@ sudo systemctl start chaoxing-web
   弹出「登录状态已失效」。
 - 线上：admin 两端均 `ok`，登录后无弹窗；扫码弹窗在延迟图片 2 秒的情况下先显示加载圈，
   加载完成后正常显示二维码（`naturalWidth=470`）。
+
+## 12. 学习通考试（测验）漏采修复（2026-11-05）
+
+### 12.1 现象
+
+用户 APP 里「影视英语与文化 → 考试」有 5 条测试（2 条待做、3 条已完成），
+看板考试数始终是 0，`连接诊断` 也显示"暂无考试"。
+
+### 12.2 根因
+
+考试列表 `/exam-ans/mooc2/exam/exam-list` 的 DOM 与作业列表不同：
+
+```html
+<!-- 作业：id 在 data 属性里 -->
+<li data="...workId=57254804&answerId=..&enc=..">
+
+<!-- 考试：id 只在 onclick 的参数里 -->
+<li>
+  <div onclick="goTest('266525113',11040808,171558311,'2026-11-07 23:36:42.0',
+                        572383735,false,'fb6134cb...','0');">
+    <p class="overHidden2 fl">影视英语与文化-测试5-翻译 2</p>
+    <p class="status fl">待做</p>
+    <div class="span_tip"><span>只允许手机APP考试</span></div>
+  </div>
+</li>
+<li><div onclick="viewExamAnswer('10981917','171406590')">…已完成…</div></li>
+```
+
+`parse_mooc_list_html` 只认 `workId/examId`，对考试页命中 0 条。
+
+### 12.3 修复
+
+- 新增 `parse_exam_list_html(page, course, now, base_url)`：
+
+  | 字段 | 来源 |
+  | --- | --- |
+  | `task_id` | `goTest` 第 2 个参数 / `viewExamAnswer` 第 1 个参数 |
+  | `deadline` | `goTest` 第 4 个参数的绝对时间；缺失时用「剩余 X 天 Y 小时 Z 分钟」推算 |
+  | `status` | `<p class="status fl">`（待做 / 待批阅 / 已完成） |
+  | `title` | `<p class="overHidden2 fl">` |
+  | `extra.tip` | `<div class="span_tip">`（作答限制） |
+
+- 客户端考试分支改用该解析器；`fetch_task_detail` 遇到 `kind=exam` 直接返回考试信息，
+  不再请求作业详情页（考试页没有可解析的题干）。
+- `Task.to_dict()` 增加 `extra`，`Engine.task_detail` 重建任务时带上，考试详情才能显示限制。
+
+### 12.4 结果
+
+- 25 门课：记录数 113 → 155（多出 42 条考试/测验），待办 13 → 14。
+- 「影视英语与文化-测试5-翻译 2」进入看板：待做、截止 2026-11-07 23:36、剩余 2 天 13 小时。
+- 「测试4-作文 1」状态为待批阅（已提交），按忽略状态规则不计入待办。
+- 详情抽屉显示"作答限制：只允许手机APP考试"，不再出现"无法解析题目"。

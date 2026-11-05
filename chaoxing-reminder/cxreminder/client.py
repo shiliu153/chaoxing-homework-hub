@@ -17,6 +17,7 @@ from .parsers import (
     parse_course_list_html,
     parse_course_list_json,
     parse_deadline,
+    parse_exam_list_html,
     parse_mooc_list_html,
     parse_task_list_html,
     parse_work_detail,
@@ -394,12 +395,16 @@ class ChaoxingClient:
                     headers={"Referer": page_url},
                 )
                 body = resp.text or ""
-                if "参数传递不正确" not in body:
-                    tasks.extend(
-                        parse_mooc_list_html(body, KIND_EXAM, course, now, resp.url)
-                    )
-                else:
+                if "参数传递不正确" in body:
                     logger.debug("[%s] 考试接口参数被拒", course)
+                else:
+                    # 考试条目没有 examId 属性，id 在 onclick="goTest(...)" 里
+                    exam_tasks = parse_exam_list_html(body, course, now, resp.url)
+                    if not exam_tasks:
+                        exam_tasks = parse_mooc_list_html(
+                            body, KIND_EXAM, course, now, resp.url
+                        )
+                    tasks.extend(exam_tasks)
             except ChaoxingError as exc:
                 logger.warning("[%s] 考试列表失败：%s", course, exc)
 
@@ -417,7 +422,9 @@ class ChaoxingClient:
         return tasks
 
     def fetch_task_detail(self, task: Task) -> Dict[str, Any]:
-        """拉取单个作业的详情（题目、分值、附件）。"""
+        """拉取单个任务的详情（作业抓题目，考试只给信息）。"""
+        if task.kind == KIND_EXAM:
+            return self._exam_detail(task)
         if not task.url:
             raise ChaoxingError("该任务没有详情链接，可能来自旧缓存")
         resp = self.request("GET", task.url)
@@ -437,6 +444,43 @@ class ChaoxingClient:
         detail["url"] = task.url
         detail["fetched_at"] = now_in(self.cfg.timezone).isoformat(sep=" ", timespec="seconds")
         return detail
+
+    def _exam_detail(self, task: Task) -> Dict[str, Any]:
+        """考试（测验）详情。
+
+        学习通的考试页是「开始作答」入口，没有可解析的题目正文，多数还限制
+        「只允许手机 APP 作答」，所以这里不抓取，只返回状态与截止时间。
+        """
+        deadline = (
+            task.deadline.strftime("%Y-%m-%d %H:%M") if task.deadline else "未设置"
+        )
+        tip = str(task.extra.get("tip") or "")
+        # 课程/状态/截止已在抽屉头部展示，这里只补网页看不到的信息
+        lines = []
+        if tip:
+            lines.append(f"作答限制：{tip}")
+        lines += [
+            "学习通考试（测验）需要进入作答页才能看到题目，网页端不提供题目预览。",
+            "请在手机学习通里打开该课程 → 考试 → 选择对应测试；截止时间以列表为准。",
+        ]
+        note = tip
+        return {
+            "title": task.title,
+            "course_name": task.course_name,
+            "status": task.status,
+            "deadline": task.deadline.isoformat(sep=" ", timespec="minutes")
+            if task.deadline else None,
+            "url": task.url,
+            "groups": [],
+            "questions": [],
+            "attachments": [],
+            "total_score": 0.0,
+            "question_count": 0,
+            "kind": KIND_EXAM,
+            "note": note,
+            "text": "\n".join(lines),
+            "fetched_at": now_in(self.cfg.timezone).isoformat(sep=" ", timespec="seconds"),
+        }
 
     def collect(self) -> List[Task]:
         self.login()

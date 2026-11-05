@@ -339,6 +339,9 @@
         html += "</div>";
       });
       html += "</div>";
+    } else if (d.kind === "exam") {
+      html += '<div class="d-sec"><h3>考试信息</h3><div class="d-empty exam-note">' +
+        esc(d.text || "学习通的考试需要进入作答页才能查看题目。") + "</div></div>";
     } else {
       html += '<div class="d-sec"><h3>题目内容</h3><div class="d-empty">' +
         "该作业没有可解析的题目（可能是附件作业、线下作业，或需要进入作答页查看）。</div></div>";

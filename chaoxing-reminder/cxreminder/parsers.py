@@ -668,3 +668,137 @@ def parse_work_detail(page: str) -> Dict[str, Any]:
     result["text"] = "\n".join(lines)[:4000]
     result["question_count"] = len(result["questions"])
     return result
+
+
+# ---------------------------------------------------------------- 考试列表（exam-ans）
+# 结构（/exam-ans/mooc2/exam/exam-list）：
+#   <div class="bottomList"><ul>
+#     <li>
+#       <div onclick="goTest('266525113',11040808,171558311,'2026-11-07 23:36:42.0',
+#                             572383735,false,'fb6134cb...','0');">
+#         <p class="overHidden2 fl">影视英语与文化-测试5-翻译 2</p>
+#         <p class="status fl">待做</p>
+#       </div>
+#       <div class="time ...">剩余61小时21分钟</div>
+#     </li>
+#     <li><div onclick="viewExamAnswer('10981917','171406590')"> ... 已完成 ... </div></li>
+#   </ul></div>
+#
+# 与作业列表不同：考试条目没有 workId/examId 属性，id 只出现在 onclick 参数里，
+# 所以 parse_mooc_list_html 对它完全失效（之前 0 条考试的根因）。
+
+_EXAM_ACTION_RE = re.compile(r"(goTest|viewExamAnswer)\s*\(([^)]*)\)", re.I)
+_EXAM_ARG_RE = re.compile(r"'([^']*)'|\"([^\"]*)\"|(-?\d+)")
+_EXAM_DT_RE = re.compile(
+    r"(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?"
+)
+_EXAM_LEFT_RE = re.compile(
+    r"剩余\s*(?:(\d+)\s*天)?\s*(\d+)\s*小时\s*(\d+)\s*分钟"
+)
+# 「只允许手机APP考试」「只允许手机APP或电脑考试客户端考试」这类限制提示
+_EXAM_TIP_RE = re.compile(
+    r'class="[^"]*span_tip[^"]*"[^>]*>(.*?)</div>', re.S | re.I
+)
+
+
+def _split_exam_args(raw: str) -> List[str]:
+    """拆分 onclick 里的参数（单双引号字符串 + 裸数字）。"""
+    args: List[str] = []
+    for m in _EXAM_ARG_RE.finditer(raw or ""):
+        value = m.group(1) if m.group(1) is not None else (
+            m.group(2) if m.group(2) is not None else m.group(3)
+        )
+        args.append((value or "").strip())
+    return args
+
+
+def _exam_deadline(raw: str, block: str, now: datetime) -> Optional[datetime]:
+    """优先取 onclick 里的完整时间；没有则用「剩余 X 天 Y 小时 Z 分钟」推算。"""
+    m = _EXAM_DT_RE.search(raw or "")
+    if m:
+        try:
+            return datetime(
+                int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                int(m.group(4)), int(m.group(5)), int(m.group(6) or 0),
+                tzinfo=now.tzinfo,
+            )
+        except ValueError:
+            pass
+    m_left = _EXAM_LEFT_RE.search(clean_text(block))
+    if m_left:
+        days = int(m_left.group(1) or 0)
+        return now + timedelta(
+            days=days, hours=int(m_left.group(2)), minutes=int(m_left.group(3))
+        )
+    return None
+
+
+def parse_exam_list_html(
+    page: str,
+    course: Course,
+    now: datetime,
+    base_url: str = "",
+) -> List[Task]:
+    """解析考试列表页（exam-ans）。"""
+    tasks: Dict[str, Task] = {}
+
+    for block in _iter_mooc_items(page):
+        m_action = _EXAM_ACTION_RE.search(block)
+        if not m_action:
+            continue
+        action = m_action.group(1)
+        raw_args = m_action.group(2)
+        args = _split_exam_args(raw_args)
+
+        # goTest(courseId, examId, relationId, deadline, ...)
+        # viewExamAnswer(examId, relationId)
+        if action.lower() == "gotest":
+            exam_id = args[1] if len(args) > 1 else ""
+            relation_id = args[2] if len(args) > 2 else ""
+        else:
+            exam_id = args[0] if args else ""
+            relation_id = args[1] if len(args) > 1 else ""
+        if not exam_id.isdigit():
+            continue
+
+        title = ""
+        m_title = _OVERHIDDEN_RE.search(block)
+        if m_title:
+            title = clean_text(m_title.group(1))
+        if not title:
+            title = f"考试{exam_id}"
+
+        status = ""
+        m_status = _STATUS_P_RE.search(block)
+        if m_status:
+            status = clean_text(m_status.group(1))
+
+        tip = ""
+        m_tip = _EXAM_TIP_RE.search(block)
+        if m_tip:
+            tip = clean_text(m_tip.group(1))
+
+        task = Task(
+            kind=KIND_EXAM,
+            course_id=course.course_id,
+            class_id=course.class_id,
+            course_name=course.name,
+            task_id=exam_id,
+            title=title,
+            deadline=_exam_deadline(raw_args, block, now),
+            status=status,
+            url=base_url or "",
+            extra={
+                "exam_id": exam_id,
+                "relation_id": relation_id,
+                "action": action,
+                "tip": tip,
+                # gTest 的参数里夹着 false 这类裸词，不能按位置取；enc 是 32 位十六进制
+                "enc": next(
+                    (a for a in args if re.fullmatch(r"[0-9a-fA-F]{24,}", a)), ""
+                ),
+            },
+        )
+        tasks.setdefault(task.key, task)
+
+    return list(tasks.values())

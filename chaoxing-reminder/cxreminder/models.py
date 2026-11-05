@@ -117,6 +117,7 @@ class Task:
             else None,
             "status": self.status,
             "url": self.url,
+            "extra": self.extra or {},
         }
 
     def one_line(self, now: datetime) -> str:

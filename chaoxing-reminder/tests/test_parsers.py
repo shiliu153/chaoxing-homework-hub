@@ -4,12 +4,13 @@ from __future__ import annotations
 import os
 import sys
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from cxreminder.models import KIND_EXAM, KIND_HOMEWORK, Course  # noqa: E402
 from cxreminder.parsers import (  # noqa: E402
+    parse_exam_list_html,
     parse_work_detail,
     parse_course_list_html,
     parse_course_list_json,
@@ -241,3 +242,91 @@ class TaskTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+EXAM_LIST_PAGE = """
+<div class="bottomList"><ul>
+  <li>
+    <div style="float:left;width:100%;" onclick="goTest('266525113',11040808,171558311,
+      '2026-11-07 23:36:42.0',572383735,false,'fb6134cb39fe93a9977a56ed1055dec4', '0');">
+      <div class="tag icon-exam icon-exam"></div>
+      <div class="right-content">
+        <p class="overHidden2 fl">影视英语与文化-测试5-翻译 2</p>
+        <div class="clear"></div>
+        <p class="status fl">待做</p>
+        <div class="span_tip" title="只允许手机APP考试"><span>只允许手机APP考试</span></div>
+      </div>
+    </div>
+    <div class="time notOver">剩余61小时21分钟</div>
+  </li>
+  <li>
+    <div onclick="viewExamAnswer('10981917','171406590')">
+      <p class="overHidden2 fl">影视英语与文化-测试4-作文 1</p>
+      <p class="status fl">待批阅</p>
+    </div>
+    <div class="time">剩余133小时36分钟</div>
+  </li>
+  <li>
+    <div onclick="viewExamAnswer('10941377','171381244')">
+      <p class="overHidden2 fl">影视英语与文化-测试3-词汇 2</p>
+      <p class="status fl">已完成</p>
+    </div>
+  </li>
+  <li>
+    <div onclick="viewExamAnswer('10990000','171999999')">
+      <p class="overHidden2 fl">只有剩余时长的测验</p>
+      <p class="status fl">待做</p>
+    </div>
+    <div class="time">剩余2天3小时5分钟</div>
+  </li>
+</ul></div>
+"""
+
+
+class ExamListTest(unittest.TestCase):
+    """考试列表：id 在 onclick 的 goTest/viewExamAnswer 参数里，没有 examId 属性。"""
+
+    def setUp(self):
+        self.course = Course("266525113", "153153143", "影视英语与文化")
+        self.now = datetime(2026, 11, 5, 10, 15)
+
+    def test_exam_items(self):
+        tasks = parse_exam_list_html(
+            EXAM_LIST_PAGE, self.course, self.now,
+            base_url="https://mooc1.chaoxing.com/exam-ans/mooc2/exam/exam-list?x=1",
+        )
+        self.assertEqual(len(tasks), 4)
+
+        first = tasks[0]
+        self.assertEqual(first.kind, "exam")
+        self.assertEqual(first.task_id, "11040808")
+        self.assertEqual(first.title, "影视英语与文化-测试5-翻译 2")
+        self.assertEqual(first.status, "待做")
+        self.assertEqual(first.deadline.strftime("%Y-%m-%d %H:%M:%S"), "2026-11-07 23:36:42")
+        self.assertEqual(first.extra["relation_id"], "171558311")
+        self.assertEqual(first.extra["action"], "goTest")
+
+        self.assertEqual(tasks[1].status, "待批阅")
+        self.assertEqual(tasks[1].task_id, "10981917")
+        self.assertEqual(tasks[2].status, "已完成")
+
+    def test_relative_remaining_time(self):
+        """没有绝对时间时，用「剩余 X 天 Y 小时 Z 分钟」推算。"""
+        tasks = parse_exam_list_html(EXAM_LIST_PAGE, self.course, self.now)
+        last = tasks[3]
+        self.assertEqual(last.title, "只有剩余时长的测验")
+        self.assertEqual(last.deadline, self.now + timedelta(days=2, hours=3, minutes=5))
+
+    def test_pending_only_real_exam(self):
+        tasks = parse_exam_list_html(EXAM_LIST_PAGE, self.course, self.now)
+        remind = type("R", (), {
+            "ignore_status_keywords": ["已完成", "待批阅"],
+            "pending_status_keywords": ["待做"],
+            "only_pending": False,
+            "expire_grace_days": 3,
+        })()
+        pending = [t.title for t in tasks if t.is_pending(remind, self.now)]
+        self.assertEqual(pending, ["影视英语与文化-测试5-翻译 2", "只有剩余时长的测验"])
+
+    def test_empty_page(self):
+        self.assertEqual(parse_exam_list_html("", self.course, self.now), [])

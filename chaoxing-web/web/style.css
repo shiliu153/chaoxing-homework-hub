@@ -511,3 +511,6 @@ legend { font-size: 12px; color: var(--accent); letter-spacing: .4px; padding: 0
 .alert-err { margin-top: 5px !important; font-size: 11.5px !important; color: var(--text-mute) !important; }
 .alert-act { margin-top: 9px; }
 .alert-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+/* 考试详情：多行说明 */
+.d-empty.exam-note { white-space: pre-wrap; line-height: 1.75; }

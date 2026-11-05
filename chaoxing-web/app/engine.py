@@ -160,6 +160,7 @@ class Engine:
             deadline=datetime.fromisoformat(item["deadline"]) if item.get("deadline") else None,
             status=item.get("status") or "",
             url=item.get("url") or "",
+            extra=item.get("extra") or {},
         )
         if source == "yuketang":
             from cxreminder.yuketang import YuketangClient
