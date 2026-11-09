@@ -33,6 +33,8 @@ COURSE_HTML_URL = "https://mooc1-1.chaoxing.com/visit/courselistdata"
 # 课程「中间页」：会 302 到 mooc2-ans 的课程主页，并在页面里下发各模块的 enc 令牌
 MIDDLE_URL = "https://mooc1-1.chaoxing.com/mooc-ans/visit/stucoursemiddle"
 WORK_LIST_URL = f"{MOOC_HOST}/mooc2/work/list"
+# 作业列表每页 12 条（实际观察值）；用于判断是否还有下一页
+WORK_PAGE_SIZE = 12
 EXAM_LIST_URL = f"{MOOC_HOST}/exam-ans/mooc2/exam/exam-list"
 
 # 课程页隐藏域里的令牌：enc / oldenc / workEnc / examEnc / openc
@@ -353,26 +355,39 @@ class ChaoxingClient:
         if not work_enc:
             logger.info("[%s] 课程页未发现 enc 令牌，回退到通用解析", course)
 
-        # ---------- 作业 ----------
+        # ---------- 作业（列表分页，每页 12 条，必须翻到底） ----------
         try:
-            resp = self.request(
-                "GET",
-                WORK_LIST_URL,
-                params={
-                    "courseId": course.course_id,
-                    "classId": course.class_id,
-                    "cpi": course.cpi,
-                    "ut": "s",
-                    "enc": work_enc,
-                },
-                headers={"Referer": page_url},
-            )
-            body = resp.text or ""
-            work_tasks = parse_mooc_list_html(body, KIND_HOMEWORK, course, now, resp.url)
-            if not work_tasks:
-                work_tasks = parse_task_list_html(
+            work_tasks: List[Task] = []
+            seen_ids = set()
+            base_params = {
+                "courseId": course.course_id,
+                "classId": course.class_id,
+                "cpi": course.cpi,
+                "ut": "s",
+                "enc": work_enc,
+            }
+            for page_no in range(1, 6):  # 最多 5 页（60 条），防止异常翻页
+                params = dict(base_params)
+                if page_no > 1:
+                    params["pageNum"] = str(page_no)
+                resp = self.request(
+                    "GET", WORK_LIST_URL, params=params,
+                    headers={"Referer": page_url},
+                )
+                body = resp.text or ""
+                page_tasks = parse_mooc_list_html(
                     body, KIND_HOMEWORK, course, now, resp.url
                 )
+                if page_no == 1 and not page_tasks:
+                    page_tasks = parse_task_list_html(
+                        body, KIND_HOMEWORK, course, now, resp.url
+                    )
+                fresh = [t for t in page_tasks if t.task_id not in seen_ids]
+                work_tasks.extend(fresh)
+                seen_ids.update(t.task_id for t in page_tasks)
+                # 不满一页或没有新条目即到底
+                if len(page_tasks) < WORK_PAGE_SIZE or not fresh:
+                    break
             tasks.extend(work_tasks)
         except ChaoxingError as exc:
             logger.warning("[%s] 作业列表失败：%s", course, exc)

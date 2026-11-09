@@ -69,6 +69,10 @@ class StateStore:
     def get(self, key: str) -> Optional[Dict[str, Any]]:
         return self.data["tasks"].get(key)
 
+    def forget(self, key: str) -> bool:
+        """删除单条记录，让任务在下一轮被当作「新任务」处理。"""
+        return self.data["tasks"].pop(key, None) is not None
+
     def mark_seen(self, key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         entry = self.data["tasks"].setdefault(key, {})
         entry.update(payload)

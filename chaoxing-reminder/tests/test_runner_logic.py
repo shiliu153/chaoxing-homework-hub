@@ -92,8 +92,13 @@ class DiffTest(unittest.TestCase):
         self.assertTrue(pending.is_pending(self.cfg.remind, NOW))
 
     def test_old_deadline_pruned_by_grace(self):
-        old = make_task("6", hours=-24 * 30)
-        self.assertFalse(old.is_pending(self.cfg.remind, NOW))
+        # 默认宽限 30 天：逾期 30 天以上才剔除，7 天内保留
+        self.assertEqual(self.cfg.remind.expire_grace_days, 30.0)
+        self.assertFalse(make_task("6", hours=-24 * 31).is_pending(self.cfg.remind, NOW))
+        self.assertTrue(make_task("6b", hours=-24 * 2).is_pending(self.cfg.remind, NOW))
+
+        self.cfg.remind.expire_grace_days = 7
+        self.assertFalse(make_task("6c", hours=-24 * 10).is_pending(self.cfg.remind, NOW))
 
     def test_state_persists_across_instances(self):
         self.diff([make_task("7", hours=10)], bootstrap=False)
@@ -130,3 +135,58 @@ class SummaryTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class IgnoredRestoreTest(unittest.TestCase):
+    """忽略后任务被老师重新开放 / 补上截止时间，应自动恢复。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="cxreminder-ignore-")
+        self.cfg = Config()
+        self.cfg.storage.data_dir = self.tmp
+        self.runner = Runner(self.cfg)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    @staticmethod
+    def _deadline(task):
+        return task.deadline.isoformat(sep=" ", timespec="minutes") if task.deadline else None
+
+    def test_reopened_task_is_restored(self):
+        task = make_task("9", hours=100, status="未交")
+        meta = {"status": "已完成", "deadline": None}
+        active, restored = self.runner._filter_ignored([task], {task.key: meta})
+        self.assertEqual(restored, [task])
+        self.assertIn(task, active)
+
+    def test_unchanged_ignored_task_stays_hidden(self):
+        task = make_task("9", hours=100, status="未交")
+        meta = {"status": "未交", "deadline": self._deadline(task)}
+        active, restored = self.runner._filter_ignored([task], {task.key: meta})
+        self.assertEqual(active, [])
+        self.assertEqual(restored, [])
+
+    def test_deadline_newly_added_restores(self):
+        task = make_task("9", hours=100, status="未交")
+        meta = {"status": "", "deadline": None}
+        active, restored = self.runner._filter_ignored([task], {task.key: meta})
+        self.assertEqual(restored, [task])
+
+    def test_restored_task_is_treated_as_new(self):
+        import json
+
+        task = make_task("9", hours=100, status="未交")
+        path = os.path.join(self.tmp, "ignored.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"keys": {task.key: {"status": "已完成", "title": task.title}}}, fh)
+
+        ignored = self.runner.ignored_meta()
+        self.assertIn(task.key, ignored)
+        active, restored = self.runner._filter_ignored([task], ignored)
+        self.assertEqual(len(restored), 1)
+
+        # 恢复后 state 里没有记录 -> _diff 会当作新任务
+        self.runner.state.forget(task.key)
+        events = self.runner._diff(active, NOW, bootstrap=False)
+        self.assertEqual([e.kind for e in events], [EVENT_NEW])

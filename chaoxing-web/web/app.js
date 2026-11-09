@@ -263,6 +263,9 @@
     renderTopbar(d);
     renderTasks(d);
     renderEvents(d);
+    var ignoredCount = (d.ignored || []).length;
+    var tab = $("#tab-ignored");
+    if (tab) tab.textContent = ignoredCount ? "已忽略 (" + ignoredCount + ")" : "已忽略";
     checkAuthAlerts(d);
   }
 
@@ -368,6 +371,7 @@
       body.course_name = (meta && (meta.course_name || meta.course)) || "";
       body.kind = (meta && meta.kind) || "homework";
       body.source = (meta && meta.source) || "chaoxing";
+      body.status = (meta && meta.status) || "";
       body.deadline = (meta && meta.deadline) || null;
     }
     await api(ignored ? "/unignore" : "/ignore", {
@@ -421,6 +425,7 @@
       $("#f-cookie").value = "";
       $("#f-interval").value = s.interval_seconds;
       $("#f-thresholds").value = (s.thresholds_hours || []).join(",");
+      $("#f-grace").value = (s.expire_grace_days != null) ? s.expire_grace_days : "";
       $("#f-daily").value = s.daily_summary_at || "";
       $("#f-wecom").value = s.wecom_webhook || "";
       $("#f-serverchan").value = s.serverchan_key || "";

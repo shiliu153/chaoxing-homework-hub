@@ -73,6 +73,7 @@ class IgnorePayload(BaseModel):
     course_name: Optional[str] = None
     kind: Optional[str] = None
     source: Optional[str] = None
+    status: Optional[str] = None
     deadline: Optional[str] = None
 
 
@@ -86,6 +87,7 @@ class SettingsPayload(BaseModel):
     cookie: Optional[str] = None
     interval_seconds: Optional[int] = None
     thresholds_hours: Optional[List[float]] = None
+    expire_grace_days: Optional[float] = None
     daily_summary_at: Optional[str] = None
     wecom_webhook: Optional[str] = None
     serverchan_key: Optional[str] = None
@@ -412,6 +414,7 @@ def get_settings(user: Dict[str, Any] = Depends(current_user)) -> Dict[str, Any]
         "has_password": bool(raw.get("account", {}).get("password")),
         "has_cookie": bool(raw.get("account", {}).get("cookie")),
         "interval_seconds": eng.cfg.poll.interval_seconds,
+        "expire_grace_days": eng.cfg.remind.expire_grace_days,
         "thresholds_hours": eng.cfg.remind.thresholds_hours,
         "daily_summary_at": raw.get("poll", {}).get("daily_summary_at", ""),
         "wecom_webhook": wecom,
@@ -450,6 +453,11 @@ def update_settings(payload: SettingsPayload,
     if payload.thresholds_hours is not None:
         values = sorted({float(v) for v in payload.thresholds_hours if float(v) > 0}, reverse=True)
         raw["remind"]["thresholds_hours"] = values or [24]
+    if payload.expire_grace_days is not None:
+        days = float(payload.expire_grace_days)
+        if days < 0 or days > 3650:
+            raise HTTPException(status_code=400, detail="逾期保留天数需在 0-3650 之间")
+        raw["remind"]["expire_grace_days"] = days
     if payload.dry_run is not None:
         raw["dry_run"] = bool(payload.dry_run)
 

@@ -24,6 +24,9 @@ from .utils import ensure_dir, fmt_delta, human_time, now_in
 
 logger = logging.getLogger(__name__)
 
+# 视为「已结束」的状态词：这些状态被改成未完成，说明作业被重新开放
+_DONE_WORDS = ("已完成", "已提交", "已交", "已批阅", "待批阅", "已互评", "已评分")
+
 EVENT_NEW = "new"
 EVENT_DUE = "due"
 EVENT_OVERDUE = "overdue"
@@ -234,8 +237,15 @@ class Runner:
         pending.sort(key=lambda t: (t.deadline is None, t.deadline or datetime.max))
 
         bootstrap = self.state.is_empty()
-        ignored = self.ignored_keys()
-        active = [t for t in pending if t.key not in ignored]
+        ignored = self.ignored_meta()
+        active, restored = self._filter_ignored(pending, ignored)
+        if restored:
+            for task in restored:
+                ignored.pop(task.key, None)
+                self.state.forget(task.key)  # 当作新任务重新提醒
+                logger.info("忽略后任务有更新，已恢复：%s / %s（%s）",
+                            task.course_name, task.title, task.status)
+            self._write_ignored(ignored)
         events = self._diff(active, now, bootstrap)
 
         summary = Summary(
@@ -300,17 +310,61 @@ class Runner:
         logger.info("雨课堂：%d 门课程，%d 场考试待参加", len(courses), len(tasks))
         return tasks, len(courses), errors
 
-    def ignored_keys(self) -> set:
-        """用户手动忽略的任务不参与提醒（与网页共用 data/ignored.json）。"""
+    def ignored_meta(self) -> Dict[str, Dict[str, Any]]:
+        """读取忽略清单（与网页共用 data/ignored.json）。"""
         path = os.path.join(self.cfg.storage.data_dir, "ignored.json")
         if not os.path.isfile(path):
-            return set()
+            return {}
         try:
             with open(path, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-            return set((data or {}).get("keys", {}).keys())
+                data = json.load(fh) or {}
+            keys = data.get("keys") or {}
+            return keys if isinstance(keys, dict) else {}
         except (OSError, json.JSONDecodeError):
-            return set()
+            return {}
+
+    def ignored_keys(self) -> set:
+        return set(self.ignored_meta().keys())
+
+    def _write_ignored(self, keys: Dict[str, Dict[str, Any]]) -> None:
+        path = os.path.join(self.cfg.storage.data_dir, "ignored.json")
+        tmp = f"{path}.tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump({"keys": keys}, fh, ensure_ascii=False, indent=2)
+            os.replace(tmp, path)
+        except OSError as exc:
+            logger.warning("写入忽略清单失败：%s", exc)
+
+    def _ignore_is_stale(self, task: Task, meta: Dict[str, Any]) -> bool:
+        """忽略之后任务被老师改动过（重新开放 / 补上截止时间），应重新出现。
+
+        只在两种明确信号下恢复，避免把用户特意忽略的老任务又翻出来：
+        1. 状态从「已完成/待批阅」这类结束态变回未完成；
+        2. 忽略时没有截止时间，现在有了（说明作业被重新发布/延期）。
+        """
+        old_status = str(meta.get("status") or "").strip()
+        new_status = (task.status or "").strip()
+        if old_status and new_status and old_status != new_status:
+            if any(word in old_status for word in _DONE_WORDS):
+                return True
+        old_deadline = str(meta.get("deadline") or "").strip()
+        if not old_deadline and task.deadline is not None:
+            return True
+        return False
+
+    def _filter_ignored(self, pending: List[Task], ignored: Dict[str, Dict[str, Any]]):
+        """按忽略清单过滤；返回 (参与提醒的任务, 需要恢复的任务)。"""
+        active: List[Task] = []
+        restored: List[Task] = []
+        for task in pending:
+            meta = ignored.get(task.key)
+            if meta is None:
+                active.append(task)
+            elif self._ignore_is_stale(task, meta):
+                restored.append(task)
+                active.append(task)
+        return active, restored
 
     # -------------------------------------------------------------- 事件判定
 

@@ -49,7 +49,7 @@ class RemindConfig:
     pending_status_keywords: List[str] = field(
         default_factory=lambda: list(DEFAULT_PENDING_STATUS)
     )
-    expire_grace_days: float = 3.0
+    expire_grace_days: float = 30.0
     max_items_per_message: int = 30
 
 
@@ -176,7 +176,7 @@ def load_config(path: str) -> Config:
         pending_status_keywords=_as_list(
             _pick(remind_raw, "pending_status_keywords", DEFAULT_PENDING_STATUS)
         ),
-        expire_grace_days=float(_pick(remind_raw, "expire_grace_days", 3)),
+        expire_grace_days=float(_pick(remind_raw, "expire_grace_days", 30)),
         max_items_per_message=int(_pick(remind_raw, "max_items_per_message", 30)),
     )
 

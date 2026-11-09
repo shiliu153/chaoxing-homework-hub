@@ -6,7 +6,7 @@
 <title>学习通待办中心</title>
 <meta name="theme-color" content="#0e1116">
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="style.css?v=20261105b">
+<link rel="stylesheet" href="style.css?v=20261109b">
 </head>
 <body>
 
@@ -93,7 +93,7 @@
           <button class="tab" data-filter="homework">作业</button>
           <button class="tab" data-filter="exam">考试</button>
           <button class="tab" data-filter="urgent">临期/逾期</button>
-          <button class="tab" data-filter="ignored">已忽略</button>
+          <button class="tab" data-filter="ignored" id="tab-ignored">已忽略</button>
         </div>
         <div class="tabs source-tabs" id="source-tabs">
           <button class="tab active" data-source="all">全部来源</button>
@@ -158,6 +158,9 @@
       <legend>轮询与阈值</legend>
       <label class="field"><span>轮询间隔（秒，≥60）</span>
         <input id="f-interval" name="interval" type="number" min="60" step="30">
+      </label>
+      <label class="field"><span>逾期保留（天，0=永久保留）</span>
+        <input id="f-grace" name="grace" type="number" min="0" max="3650" step="1" placeholder="30">
       </label>
       <label class="field"><span>提醒阈值（小时，逗号分隔）</span>
         <input id="f-thresholds" name="thresholds" placeholder="72,24,3">
@@ -269,7 +272,7 @@
 </div>
 
 <div id="toast" class="toast"></div>
-<script src="config.js?v=20261105b"></script>
-<script src="app.js?v=20261105b"></script>
+<script src="config.js?v=20261109b"></script>
+<script src="app.js?v=20261109b"></script>
 </body>
 </html>
